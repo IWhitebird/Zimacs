@@ -1,10 +1,12 @@
 //* Zimacs *//
 const std = @import("std");
-
+const stdx = @import("./stdx/stdx.zig");
 pub const pen = @import("raylib");
+pub const gui = @import("raygui");
 pub const gfx = @import("./core/gfx.zig");
 pub const Window = @import("./core/window.zig").Window;
 pub const Editor = @import("./core/editor.zig").Editor;
+pub const Buffer = @import("./core/buffer.zig").Buffer;
 
 pub const thread = std.Thread;
 pub const print = std.debug.print;
@@ -14,6 +16,8 @@ pub const ZiError = anyerror;
 pub const User = struct {
     name: []const u8,
 };
+
+pub const gpa = std.heap.page_allocator;
 
 pub const Artifact = struct {
     ctx: *anyopaque,
@@ -52,60 +56,87 @@ pub const Info = struct {
 
 pub const Setting = struct {
     frames: i32 = 60,
-    //TODO : change the  font
+    fontSize: f32 = 18,
+    spacing: f32 = 0,
     font: pen.Font = undefined,
+    defaultFontName: []const u8 = "jetbrainsmono.ttf",
+    defaultFontPath: []const u8 = "C:/zigging/assets/font/JetBrainsMono-Medium.ttf.ttf",
 
-    pub fn init() Setting {
-        return Setting{
-            .frames = 60,
-            // .font = pen.getFontDefault(),
-        };
+    const Self = @This();
+
+    pub fn init(s: *Self) !void {
+        try s.loadFont();
+    }
+
+    pub fn loadFont(s: *Self) !void {
+        var fontFile = try std.fs.openFileAbsolute(s.defaultFontPath, .{});
+        defer fontFile.close();
+        const fontBuffer = try fontFile.readToEndAlloc(gpa, 1024 * 1024 * 1024);
+        const myFont = pen.loadFontFromMemory(".ttf", fontBuffer, @intFromFloat(s.fontSize), null);
+        gui.guiSetFont(myFont);
+        while (!pen.isFontReady(myFont)) {
+            print("Loading font\n", .{});
+        }
+        print("Font loaded {}", .{pen.isFontReady(myFont)});
+        s.font = myFont;
     }
 };
 
+pub var settings = Setting{};
 pub var editor = Editor{};
-pub var settings = Setting.init();
 pub var window = Window{};
-pub var artifacts = std.ArrayList(Artifact).init(std.heap.page_allocator);
+pub var buffer = Buffer{};
+pub var artifacts = std.ArrayList(Artifact).init(gpa);
 
 pub fn init() ZiError!void {
-    print("Running Zimacs ... \n", .{});
+    print("Initializing Zimacs\n", .{});
 
-    try artifacts.append(editor.artifact());
-    try artifacts.append(window.artifact());
+    artifacts.append(editor.artifact()) catch unreachable;
+    artifacts.append(window.artifact()) catch unreachable;
+    artifacts.append(buffer.artifact()) catch unreachable;
 
     for (artifacts.items) |*artifact| {
         try Artifact.init(artifact.*);
     }
 
+    // var threadHandles = std.StringHashMap(std.Thread).init(gpa);
+    // defer threadHandles.deinit();
+
+    try settings.init();
+
     while (!pen.windowShouldClose()) {
         pen.beginDrawing();
         defer pen.endDrawing();
-        defer pen.clearBackground(pen.Color.black);
-        try renderArtifacts(&artifacts);
+        pen.clearBackground(pen.Color.black);
+        try renderArtifactsLinearly(&artifacts);
+        // Raylib use OpenGL , Which needs main thread to render
+        // try renderArtifactsConcurrently(&artifacts, &threadHandles);
     }
 }
 
-fn renderArtifacts(coreArtifacts: *std.ArrayList(Artifact)) ZiError!void {
+fn renderArtifactsConcurrently(coreArtifacts: *std.ArrayList(Artifact), threadHandles: *std.StringHashMap(std.Thread)) ZiError!void {
     if (coreArtifacts.items.len == 0) {
         return;
     }
-    // Spawn a thread for each artifact
-    var threadHandles = std.StringHashMap(std.Thread).init(std.heap.page_allocator);
-    defer threadHandles.deinit();
 
     for (coreArtifacts.items) |*artifact| {
-        // Create a closure to pass to the thread
         const t = try std.Thread.spawn(.{}, threadFunc, .{artifact});
         try threadHandles.put(artifact.*.name, t);
     }
 
-    // Join all threads after spawning
     var mapIt = threadHandles.iterator();
     while (mapIt.next()) |entry| {
         // print("Joining thread for artifact: {s}\n", .{entry.key_ptr.*});
-        // Wait for each thread to complete its execution
-        entry.value_ptr.*.join();
+        entry.value_ptr.join();
+    }
+}
+
+fn renderArtifactsLinearly(coreArtifacts: *std.ArrayList(Artifact)) ZiError!void {
+    if (coreArtifacts.items.len == 0) {
+        return;
+    }
+    for (coreArtifacts.items) |*artifact| {
+        try artifact.*.render();
     }
 }
 
