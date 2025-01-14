@@ -1,2 +1,5 @@
+.gitingore
 .zig-cache
 zig-out
+Preditor
+raylib_test.zig

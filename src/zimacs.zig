@@ -7,6 +7,7 @@ pub const gfx = @import("./core/gfx.zig");
 pub const Window = @import("./core/window.zig").Window;
 pub const Editor = @import("./core/editor.zig").Editor;
 pub const Buffer = @import("./core/buffer.zig").Buffer;
+pub const Clavier = @import("./core/clavier.zig").Clavier;
 
 pub const thread = std.Thread;
 pub const print = std.debug.print;
@@ -60,7 +61,7 @@ pub const Setting = struct {
     spacing: f32 = 0,
     font: pen.Font = undefined,
     defaultFontName: []const u8 = "jetbrainsmono.ttf",
-    defaultFontPath: []const u8 = "C:/zigging/assets/font/JetBrainsMono-Medium.ttf.ttf",
+    defaultFontPath: []const u8 = "F:/Project/zigging/assets/font/jetbrainsmono.ttf",
 
     const Self = @This();
 
@@ -72,12 +73,12 @@ pub const Setting = struct {
         var fontFile = try std.fs.openFileAbsolute(s.defaultFontPath, .{});
         defer fontFile.close();
         const fontBuffer = try fontFile.readToEndAlloc(gpa, 1024 * 1024 * 1024);
-        const myFont = pen.loadFontFromMemory(".ttf", fontBuffer, @intFromFloat(s.fontSize), null);
+        const myFont = try pen.loadFontFromMemory(".ttf", fontBuffer, @intFromFloat(s.fontSize), null);
         gui.guiSetFont(myFont);
-        while (!pen.isFontReady(myFont)) {
+        while (!pen.isFontValid(myFont)) {
             print("Loading font\n", .{});
         }
-        print("Font loaded {}", .{pen.isFontReady(myFont)});
+        print("Font loaded {}", .{pen.isFontValid(myFont)});
         s.font = myFont;
     }
 };
@@ -86,6 +87,7 @@ pub var settings = Setting{};
 pub var editor = Editor{};
 pub var window = Window{};
 pub var buffer = Buffer{};
+pub var clavier = Clavier{};
 pub var artifacts = std.ArrayList(Artifact).init(gpa);
 
 pub fn init() ZiError!void {
@@ -94,6 +96,7 @@ pub fn init() ZiError!void {
     artifacts.append(editor.artifact()) catch unreachable;
     artifacts.append(window.artifact()) catch unreachable;
     artifacts.append(buffer.artifact()) catch unreachable;
+    artifacts.append(clavier.artifact()) catch unreachable;
 
     for (artifacts.items) |*artifact| {
         try Artifact.init(artifact.*);

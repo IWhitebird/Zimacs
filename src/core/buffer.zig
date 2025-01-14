@@ -46,7 +46,7 @@ pub const Buffer = struct {
     };
     pub fn artifact(s: *Self) z.Artifact {
         return .{
-            .name = "Editor",
+            .name = "Buffer",
             .artifactType = "core",
             .version = "0.1",
             .ctx = @ptrCast(s),

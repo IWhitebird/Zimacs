@@ -55,12 +55,12 @@ pub const Window = struct {
     pub fn render(ctx: *anyopaque) z.ZiError!void {
         const w: *Self = @alignCast(@ptrCast(ctx));
 
-        _ = z.gui.guiButton(z.pen.Rectangle{
-            .x = 10.0,
-            .y = 10.0,
-            .width = 100.0,
-            .height = 50.0,
-        }, "yo");
+        // _ = z.gui.guiButton(z.pen.Rectangle{
+        //     .x = 10.0,
+        //     .y = 10.0,
+        //     .width = 100.0,
+        //     .height = 50.0,
+        // }, "yo");
 
         if (pen.isFileDropped()) {
             const filePaths = pen.loadDroppedFiles();
