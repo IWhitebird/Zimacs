@@ -1,7 +1,8 @@
 const std = @import("std");
+const Tag = std.Target.Os.Tag;
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{ .default_target = .{ .os_tag = Tag.windows } });
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
