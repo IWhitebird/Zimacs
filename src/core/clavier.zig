@@ -133,15 +133,19 @@ pub const Clavier = struct {
 
     pub fn getKeyPressed(s: *Self) !?Key {
         _ = s;
+        const isShift = isKeyPressed(pen.KeyboardKey.left_shift) or isKeyPressed(pen.KeyboardKey.right_shift);
+        const isCtrl = isKeyPressed(pen.KeyboardKey.left_control) or isKeyPressed(pen.KeyboardKey.right_control);
+        const isAlt = isKeyPressed(pen.KeyboardKey.left_alt) or isKeyPressed(pen.KeyboardKey.right_alt);
+        const isSuper = isKeyPressed(pen.KeyboardKey.left_super) or isKeyPressed(pen.KeyboardKey.right_super);
         var KeyMapIt = KeyMap.keyIterator();
         while (KeyMapIt.next()) |k| {
             if (isKeyPressed(k.pressedKey)) {
                 return Key{
                     .modifiers = Modifiers{
-                        .ctrl = isKeyPressed(pen.KeyboardKey.left_control) or isKeyPressed(pen.KeyboardKey.right_control),
-                        .alt = isKeyPressed(pen.KeyboardKey.left_alt) or isKeyPressed(pen.KeyboardKey.right_alt),
-                        .super = isKeyPressed(pen.KeyboardKey.left_super) or isKeyPressed(pen.KeyboardKey.right_super),
-                        .shift = isKeyPressed(pen.KeyboardKey.left_shift) or isKeyPressed(pen.KeyboardKey.right_shift),
+                        .ctrl = isCtrl,
+                        .alt = isAlt,
+                        .super = isSuper,
+                        .shift = isShift,
                     },
                     .pressedKey = k.pressedKey,
                 };
