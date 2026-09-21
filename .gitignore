@@ -1,5 +1,6 @@
-.gitingore
 .zig-cache
 zig-out
+zig-pkg
 raylib_test.zig
 .ptests
+.temp

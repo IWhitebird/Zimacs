@@ -1,92 +1,115 @@
+//! The OS window: opening it, tracking its size, and accepting dropped files.
+
 const std = @import("std");
-const z = @import("../zimacs.zig");
-const pen = z.pen;
+const pen = @import("raylib");
+const app = @import("../zimacs.zig");
+const Artifact = @import("artifact.zig").Artifact;
+
+const icon_data = @embedFile("icon_data");
+
+/// The page's own idea of how big the canvas is, and how many real pixels
+/// each of its pixels covers.
+extern fn emscripten_get_element_css_size(target: [*:0]const u8, width: *f64, height: *f64) c_int;
+extern fn emscripten_get_device_pixel_ratio() f64;
+
 
 pub const Window = struct {
-    mainScreen: Screen = Screen{
-        .title = "Zimacs",
-        .width = 800,
-        .height = 450,
-    },
+    title: [:0]const u8 = "Zimacs",
+    width: i32 = 800,
+    height: i32 = 450,
+    target_fps: i32 = 165,
 
     const Self = @This();
 
-    const vTable = z.Artifact.VTable{
+    const table = Artifact.Table{
         .init = &init,
         .deinit = &deinit,
         .render = &render,
     };
 
-    pub fn artifact(s: *Self) z.Artifact {
-        return .{
-            .name = "Window",
-            .artifactType = "core",
-            .version = "0.1",
-            .ctx = @ptrCast(s),
-            .vTable = &vTable,
-        };
+    pub fn artifact(w: *Self) Artifact {
+        return .{ .ctx = @ptrCast(w), .table = &table, .name = "Window" };
     }
 
-    pub const Screen = struct {
-        title: [*:0]const u8 = "Zimacs",
-        width: i32 = 800,
-        height: i32 = 450,
-    };
-
-    pub fn getScreenInfo(s: *Self) Screen {
-        return .{
-            .title = s.mainScreen.title,
-            .width = s.mainScreen.width,
-            .height = s.mainScreen.height,
-        };
-    }
-
-    pub fn init(ctx: *anyopaque) z.ZiError!void {
+    pub fn init(ctx: *anyopaque) !void {
         const w: *Self = @alignCast(@ptrCast(ctx));
-        z.print("Initializing Window\n", .{});
-        pen.setConfigFlags(pen.ConfigFlags{
+        // High-DPI is left off on the web: `fitToCanvas` already sizes the
+        // buffer to the display's real pixels, and letting raylib scale as
+        // well makes its screen size half the render size - which silently
+        // breaks scissor rectangles, since those flip y using the screen size.
+        pen.setConfigFlags(.{
             .window_resizable = true,
-            .window_highdpi = true,
+            .window_highdpi = !app.on_web,
         });
-        pen.setTargetFPS(165);
-        pen.initWindow(w.mainScreen.width, w.mainScreen.height, w.mainScreen.title);
+        pen.initWindow(w.width, w.height, w.title);
+        pen.setTargetFPS(w.target_fps);
+        // raylib closes the window on Escape by default, which is no good in
+        // an editor. Close via the title bar instead.
+        pen.setExitKey(.null);
+        setIcon();
     }
 
-    pub fn render(ctx: *anyopaque) z.ZiError!void {
-        const w: *Self = @alignCast(@ptrCast(ctx));
-
-        // _ = z.gui.guiButton(z.pen.Rectangle{
-        //     .x = 10.0,
-        //     .y = 10.0,
-        //     .width = 100.0,
-        //     .height = 50.0,
-        // }, "yo");
-
-        if (pen.isFileDropped()) {
-            const filePaths = pen.loadDroppedFiles();
-            for (0..filePaths.count, filePaths.paths) |i, filePath| {
-                _ = i; // autofix
-                const as_slice: [:0]const u8 = std.mem.span(filePath);
-                // z.print("{*}", .{ i, as_slice });
-                try z.buffer.readFile(as_slice);
-            }
-        }
-
-        if (pen.isWindowResized()) {
-            var rwLock = std.Thread.RwLock{};
-            rwLock.lock();
-            const newWidth = pen.getRenderWidth();
-            const newHeight = pen.getRenderHeight();
-            w.mainScreen.width = newWidth;
-            w.mainScreen.height = newHeight;
-            z.print("new : {} , hw : {} , w : {} , h : {} , \n", .{ newWidth, newHeight, w.mainScreen.width, w.mainScreen.height });
-            rwLock.unlock();
-        }
-    }
-
-    pub fn deinit(ctx: *anyopaque) z.ZiError!void {
-        _ = ctx; // autofix
+    pub fn deinit(ctx: *anyopaque) !void {
+        _ = ctx;
         pen.closeWindow();
-        z.print("Deiniting Window\n", .{});
+    }
+
+    pub fn render(ctx: *anyopaque) !void {
+        const w: *Self = @alignCast(@ptrCast(ctx));
+        if (pen.isWindowResized()) {
+            w.width = pen.getRenderWidth();
+            w.height = pen.getRenderHeight();
+        }
+        openDroppedFiles();
     }
 };
+
+/// Matches the drawing buffer to the canvas, at the display's real pixel
+/// density.
+///
+/// The page stretches the canvas to fill the window with CSS, but the buffer
+/// raylib made is whatever `initWindow` asked for. Left alone the browser
+/// scales that small buffer up, which is why text looks soft. Sizing the
+/// buffer to the CSS size times the device pixel ratio gives one buffer pixel
+/// per screen pixel.
+///
+/// Must run before `beginDrawing`: resizing throws away the framebuffer, so
+/// doing it mid-frame would discard everything already drawn.
+pub fn fitToCanvas() void {
+    if (!app.on_web) return;
+
+    var css_width: f64 = 0;
+    var css_height: f64 = 0;
+    if (emscripten_get_element_css_size("#canvas", &css_width, &css_height) != 0) return;
+
+    const density = emscripten_get_device_pixel_ratio();
+    const want_width: i32 = @intFromFloat(@round(css_width * density));
+    const want_height: i32 = @intFromFloat(@round(css_height * density));
+    if (want_width <= 0 or want_height <= 0) return;
+
+    if (want_width != pen.getRenderWidth() or want_height != pen.getRenderHeight()) {
+        pen.setWindowSize(want_width, want_height);
+    }
+}
+
+/// The window manager keeps its own copy, so ours is freed straight away.
+fn setIcon() void {
+    const image = pen.loadImageFromMemory(".png", icon_data) catch return;
+    defer pen.unloadImage(image);
+    pen.setWindowIcon(image);
+}
+
+fn openDroppedFiles() void {
+    if (!pen.isFileDropped()) return;
+
+    const dropped = pen.loadDroppedFiles();
+    // raylib owns this list until it is handed back.
+    defer pen.unloadDroppedFiles(dropped);
+
+    for (0..dropped.count) |i| {
+        const path: [:0]const u8 = std.mem.span(dropped.paths[i]);
+        app.openFile(path) catch |err| {
+            std.debug.print("Could not open {s}: {s}\n", .{ path, @errorName(err) });
+        };
+    }
+}
