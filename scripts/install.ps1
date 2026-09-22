@@ -26,16 +26,25 @@ Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
 
 # Verify against the checksum published next to the zip. This catches a
 # truncated download; it is not a signature and does not prove authorship.
+# GitHub serves the .sha256 as application/octet-stream, so .Content on the
+# response is a byte array, not text, and splitting it compares the hash
+# against the first byte's number. Saving it and reading it back as text
+# behaves the same on Windows PowerShell 5.1 and PowerShell 7.
+$sumFile = Join-Path $tmp "$name.zip.sha256"
+$haveSum = $true
 try {
-    $published = (Invoke-WebRequest "$url.sha256" -UseBasicParsing).Content
-    $want = ($published -split '\s+')[0]
+    Invoke-WebRequest "$url.sha256" -OutFile $sumFile -UseBasicParsing
+} catch {
+    $haveSum = $false
+    Write-Host "No checksum published, skipping verification"
+}
+if ($haveSum) {
+    $want = ((Get-Content $sumFile -Raw).Trim() -split '\s+')[0]
     $got = (Get-FileHash $zip -Algorithm SHA256).Hash
-    if ($want -and $got -ne $want.Trim().ToUpper()) {
-        throw "checksum did not match, refusing to install"
+    if ($got -ne $want) {
+        throw "checksum did not match, refusing to install (expected $want, got $got)"
     }
     Write-Host "Checksum verified"
-} catch [System.Net.WebException] {
-    Write-Host "No checksum published, skipping verification"
 }
 
 Expand-Archive $zip -DestinationPath $tmp -Force
