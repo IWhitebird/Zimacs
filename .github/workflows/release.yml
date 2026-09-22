@@ -53,6 +53,17 @@ jobs:
         # CPU, and the binary dies with SIGILL on anything older.
       - run: zig build -Dcpu=baseline -Doptimize=ReleaseFast
 
+        # The v0.1.0 binaries shipped with AVX in them and died with SIGILL on
+        # older processors. A baseline x86-64 build has no VEX-encoded
+        # instruction in it at all, so this fails the release rather than
+        # publishing one that crashes on someone else's machine.
+      - name: Check the binary is really baseline
+        run: |
+          count=$(objdump -d --no-show-raw-insn zig-out/bin/Zimacs \
+            | awk '{print $2}' | grep -cE '^v[a-z]' || true)
+          echo "VEX-encoded instructions: $count"
+          test "$count" -eq 0
+
       - name: Package
         run: |
           name="zimacs-${GITHUB_REF_NAME}-linux-x86_64"
@@ -79,6 +90,13 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
 
       - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseFast
+
+      - name: Check the binary is really baseline
+        run: |
+          count=$(objdump -d --no-show-raw-insn zig-out/bin/Zimacs.exe \
+            | awk '{print $2}' | grep -cE '^v[a-z]' || true)
+          echo "VEX-encoded instructions: $count"
+          test "$count" -eq 0
 
       - name: Package
         run: |
