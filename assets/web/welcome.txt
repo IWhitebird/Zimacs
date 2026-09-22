@@ -4,6 +4,11 @@ This is the editor itself, compiled to WebAssembly. Same piece tree, same
 keybindings, same code as the download. This buffer is an ordinary one, so
 type in it, break it, undo it.
 
+The second tab is sqlite3.c, the SQLite amalgamation: 9.3 MB and 262,899
+lines of real C. Press Ctrl+2 to open it, then Ctrl+End to jump to the
+bottom, or Ctrl+G and ask for line 200000. It loads in the background, so
+give it a moment on a slow connection.
+
 Worth trying
   Ctrl+F            find, then F3 and Shift+F3 for next and previous
   Ctrl+G            go to a line number

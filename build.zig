@@ -73,7 +73,15 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .asyncify = true,
             }),
-            .settings = rlz.emsdk.emccDefaultSettings(b.allocator, .{ .optimize = optimize }),
+            .settings = web_settings: {
+                var settings = rlz.emsdk.emccDefaultSettings(b.allocator, .{ .optimize = optimize });
+                // emcc fixes the heap at 16 MB unless told otherwise, which is
+                // not enough to open a file of any size. The demo loads the
+                // SQLite amalgamation, so the heap has to be able to grow.
+                settings.put("ALLOW_MEMORY_GROWTH", "1") catch @panic("OOM");
+                settings.put("INITIAL_MEMORY", "33554432") catch @panic("OOM");
+                break :web_settings settings;
+            },
             .shell_file_path = b.path("assets/web/shell.html"),
             .install_dir = web_dir,
         });

@@ -17,6 +17,7 @@ const config_mod = @import("core/config.zig");
 const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
 const session = @import("core/session.zig");
+const web = @import("core/web.zig");
 const welcome_data = @embedFile("welcome_data");
 const update_mod = @import("core/update.zig");
 const theme = @import("core/theme.zig");
@@ -180,10 +181,23 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
     // visitor staring at nothing. Give the web build something to poke at.
     if (on_web) {
         _ = try buffer.newFilled("welcome.txt", welcome_data);
+        // Sits next to Zimacs.html. It arrives in the background so the
+        // editor is usable straight away rather than after nine megabytes.
+        web.fetch("sqlite3.c", sqliteArrived);
         return;
     }
 
     _ = try buffer.newScratch();
+}
+
+/// The demo's second tab: a real 9 MB file, so the piece tree is doing
+/// something more convincing than holding a paragraph of welcome text.
+fn sqliteArrived(bytes: []const u8) void {
+    // Opening a tab selects it, and yanking the view out from under someone
+    // mid-sentence is rude, so put the selection back where it was.
+    const was_active = buffer.active;
+    _ = buffer.newFilled("sqlite3.c", bytes) catch return;
+    buffer.active = was_active;
 }
 
 extern fn emscripten_console_error(text: [*:0]const u8) void;

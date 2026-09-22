@@ -44,7 +44,7 @@ const PLATFORMS = [
 const FEATURES = [
   {
     title: "Piece tree",
-    body: "The storage design VS Code uses. Edits stay fast in large files instead of copying the whole buffer around.",
+    body: "The storage design VS Code uses. Edits stay fast in large files instead of copying the whole buffer around. Try the 262,899 line tab above.",
   },
   {
     title: "Session restore",
@@ -226,8 +226,10 @@ function Demo() {
       <p className="lede">
         This is the editor itself, compiled to WebAssembly and running in your
         browser. Same piece tree, same keybindings, same code as the download.
-        Click into it and type. Opening and saving files are the only things
-        turned off, because a page has no filesystem.
+        Click into it and type. The second tab holds the SQLite amalgamation,
+        9.3 MB and 262,899 lines of C, so you can see what the piece tree does
+        with a file that size. Opening and saving your own files are the only
+        things turned off, because a page has no filesystem.
       </p>
 
       <div className="stage">
