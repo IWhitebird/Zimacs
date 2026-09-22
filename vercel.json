@@ -7,7 +7,12 @@
   "headers": [
     {
       "source": "/demo/Zimacs.wasm",
-      "headers": [{ "key": "Content-Type", "value": "application/wasm" }]
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/wasm"
+        }
+      ]
     },
     {
       "source": "/demo/(.*)",

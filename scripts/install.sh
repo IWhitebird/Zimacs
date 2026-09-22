@@ -6,6 +6,7 @@
 #
 # Set PREFIX to install somewhere other than ~/.local.
 set -eu
+exec </dev/null
 
 REPO="IWhitebird/Zimacs"
 PREFIX="${PREFIX:-$HOME/.local}"
@@ -34,18 +35,22 @@ url="https://github.com/$REPO/releases/download/$tag/$name.tar.gz"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-say "Downloading Zimacs $tag"
-curl -fsSL "$url" -o "$tmp/$name.tar.gz" || die "download failed: $url"
+say "Downloading Zimacs $tag (about 4.5 MB)"
+curl -fL --progress-bar \
+  --connect-timeout 20 --max-time 900 --retry 3 --retry-delay 2 \
+  "$url" -o "$tmp/$name.tar.gz" || die "download failed: $url"
 
 # Verify against the checksum published next to the tarball. This catches a
 # truncated download; it is not a signature and does not prove authorship.
-if curl -fsSL "$url.sha256" -o "$tmp/$name.tar.gz.sha256" 2>/dev/null &&
+if curl -fsSL --connect-timeout 20 --max-time 60 \
+  "$url.sha256" -o "$tmp/$name.tar.gz.sha256" 2>/dev/null &&
   command -v sha256sum >/dev/null 2>&1; then
   (cd "$tmp" && sha256sum -c "$name.tar.gz.sha256" >/dev/null 2>&1) ||
     die "checksum did not match, refusing to install"
   say "Checksum verified"
 fi
 
+say "Unpacking"
 tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
 src="$tmp/$name"
 [ -x "$src/Zimacs" ] || die "the archive did not contain the binary"
@@ -56,6 +61,7 @@ appdir="$PREFIX/share/applications"
 icondir="$PREFIX/share/icons/hicolor/256x256/apps"
 mkdir -p "$libdir" "$bindir" "$appdir" "$icondir"
 
+say "Installing to $PREFIX"
 install -m 755 "$src/Zimacs" "$libdir/Zimacs"
 if [ -f "$src/zimacs.png" ]; then
   install -m 644 "$src/zimacs.png" "$icondir/zimacs.png"
@@ -80,7 +86,9 @@ Keywords=text;editor;code;
 DESKTOP
 chmod 644 "$appdir/zimacs.desktop"
 
-# Without these the menu can take a login to notice the new entry.
+# Without these the menu can take a login to notice the new entry. They
+# scan every theme on the machine, so they are the slowest step here.
+say "Registering it with the desktop"
 command -v update-desktop-database >/dev/null 2>&1 &&
   update-desktop-database "$appdir" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 &&

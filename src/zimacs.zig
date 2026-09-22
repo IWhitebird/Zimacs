@@ -18,6 +18,10 @@ const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
 const session = @import("core/session.zig");
 const web = @import("core/web.zig");
+
+/// The SQLite amalgamation, from a mirror that serves it with CORS headers,
+/// which sqlite.org itself does not.
+const sqlite_url = "https://cdn.jsdelivr.net/gh/gittiver/sqlite3-amalgamation@master/src/sqlite3/sqlite3.c";
 const welcome_data = @embedFile("welcome_data");
 const update_mod = @import("core/update.zig");
 const theme = @import("core/theme.zig");
@@ -181,9 +185,10 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
     // visitor staring at nothing. Give the web build something to poke at.
     if (on_web) {
         _ = try buffer.newFilled("welcome.txt", welcome_data);
-        // Sits next to Zimacs.html. It arrives in the background so the
-        // editor is usable straight away rather than after nine megabytes.
-        web.fetch("sqlite3.c", sqliteArrived);
+        // Fetched from a CDN rather than served by us: it is nine megabytes
+        // of someone else's source and has no business in this repository.
+        // It arrives in the background, so the editor is usable immediately.
+        web.fetch(sqlite_url, sqliteArrived);
         return;
     }
 
