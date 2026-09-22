@@ -113,6 +113,18 @@ unavailable there; everything else works.
 | `Ctrl` `+` `-` `0` | zoom in, out, reset |
 | wheel / `Shift`+wheel | scroll / scroll sideways |
 
+## Updates
+
+`Help → Check for Updates` asks GitHub for the latest release and tells you
+whether a newer one exists. It reports in the status bar and the About panel,
+and runs in the background so it never stalls the editor.
+
+It does not download or install anything. Replacing a running program with
+bytes fetched over the network is only safe when those bytes are signed by a
+key the binary already trusts — a checksum published beside the download
+proves nothing, since anyone able to change one can change the other. Until
+Zimacs ships signed releases, it tells you and lets you fetch it yourself.
+
 ## Settings
 
 Written on first run, and openable from `Help → Edit Settings` or `Ctrl+,`:
