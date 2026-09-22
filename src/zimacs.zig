@@ -147,7 +147,7 @@ pub fn run(start: Start) !void {
         };
     };
 
-    while (!pen.windowShouldClose()) {
+    while (!window.shouldClose()) {
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
 

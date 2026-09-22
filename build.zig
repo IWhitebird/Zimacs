@@ -17,6 +17,8 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/browser.zig", .raylib = false },
     .{ .path = "src/core/update.zig", .raylib = false },
     .{ .path = "src/core/menu.zig", .raylib = true },
+    .{ .path = "src/core/titlebar.zig", .raylib = true },
+    .{ .path = "src/core/native.zig", .raylib = true },
     .{ .path = "src/core/theme.zig", .raylib = true },
     .{ .path = "src/core/layout.zig", .raylib = true },
 };
@@ -96,6 +98,11 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe = b.addExecutable(.{ .name = "Zimacs", .root_module = exe_module });
+    // A console program gets a terminal opened alongside it when started
+    // from Explorer or the Start Menu, which for an editor is just a black
+    // window full of raylib's log. The GUI subsystem gets no terminal. main
+    // still runs as normal, because libc's startup code calls it either way.
+    if (target.result.os.tag == .windows) exe.subsystem = .windows;
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);

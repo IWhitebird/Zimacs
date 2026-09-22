@@ -52,6 +52,8 @@ pub const Config = struct {
     wrap_lines: bool = false,
     /// List dot-files in the file browser.
     show_hidden: bool = false,
+    /// Draw our own title bar instead of the operating system's frame.
+    custom_titlebar: bool = true,
     colors: Colors = .{},
 
     const Self = @This();
@@ -91,6 +93,8 @@ pub const Config = struct {
             c.wrap_lines = try parseBool(value);
         } else if (eq(key, "show_hidden")) {
             c.show_hidden = try parseBool(value);
+        } else if (eq(key, "custom_titlebar")) {
+            c.custom_titlebar = try parseBool(value);
         } else {
             try c.colors.apply(key, value);
         }
@@ -125,6 +129,10 @@ const default_text =
     \\
     \\# Show dot-files in the file browser.
     \\show_hidden = false
+    \\
+    \\# Draw Zimacs's own title bar. Set to false for your system's window
+    \\# frame instead. Takes effect the next time Zimacs starts.
+    \\custom_titlebar = true
     \\
     \\background = #181818
     \\text = #dedee6
@@ -191,6 +199,7 @@ test "reads values and ignores comments and blank lines" {
         \\tab_width = 2
         \\expand_tabs = false
         \\wrap_lines = true
+        \\custom_titlebar = false
         \\background = #202020
     );
     try testing.expectEqual(@as(f32, 24), c.font_size);
@@ -198,6 +207,7 @@ test "reads values and ignores comments and blank lines" {
     try testing.expectEqual(@as(u8, 2), c.tab_width);
     try testing.expectEqual(false, c.expand_tabs);
     try testing.expectEqual(true, c.wrap_lines);
+    try testing.expectEqual(false, c.custom_titlebar);
     try testing.expectEqual(@as(u24, 0x202020), c.colors.background);
 }
 

@@ -11,6 +11,7 @@ const theme = @import("theme.zig");
 const layout = @import("layout.zig");
 const text = @import("text.zig");
 const menu = @import("menu.zig");
+const titlebar = @import("titlebar.zig");
 const wrap = @import("wrap.zig");
 const update_mod = @import("update.zig");
 const Artifact = @import("artifact.zig").Artifact;
@@ -60,6 +61,7 @@ pub const Editor = struct {
         const view = app.buffer.current() orelse {
             try drawHint(l, cell);
             drawMenu(l, cell);
+            drawFrame(l);
             return;
         };
 
@@ -72,6 +74,7 @@ pub const Editor = struct {
         try e.drawPrompt(l, cell);
         // Last, so the dropdown and the About panel sit over everything else.
         drawMenu(l, cell);
+        drawFrame(l);
     }
 
     /// Scrolls vertically without moving the caret.
@@ -535,8 +538,79 @@ fn drawMenu(l: Layout, cell: Metrics) void {
         );
     }
 
+    if (app.window.custom_frame) drawTitlebar(l, cell, point);
     if (app.menu.open) |index| drawDropdown(index, l, cell, point);
     if (app.menu.showing_about) drawAbout(l, cell);
+}
+
+/// The red Windows 11 uses behind a hovered Close button.
+const close_hover = pen.Color{ .r = 0xC4, .g = 0x2B, .b = 0x1C, .a = 0xFF };
+
+/// The window's title and its buttons, sharing the menu row when Zimacs draws
+/// its own frame.
+fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
+    var buf: [256]u8 = undefined;
+    const title: [:0]const u8 = if (app.buffer.current()) |v|
+        std.fmt.bufPrintZ(&buf, "{s} - Zimacs", .{v.name}) catch "Zimacs"
+    else
+        "Zimacs";
+    if (titlebar.titleRect(app.font.widthOf(title), l, app.font)) |rect| {
+        app.font.draw(title, rect.x, rect.y + (rect.height - cell.height) / 2, theme.current.tab_text);
+    }
+
+    for (titlebar.buttons) |b| {
+        const rect = titlebar.buttonRect(b, l);
+        const hovered = pen.checkCollisionPointRec(point, rect);
+        if (hovered) pen.drawRectangleRec(rect, if (b == .close) close_hover else theme.current.tab_active);
+        const ink = if (hovered and b == .close)
+            pen.Color.white
+        else if (hovered)
+            theme.current.tab_text_active
+        else
+            theme.current.tab_text;
+        drawCaptionGlyph(b, rect, ink);
+    }
+}
+
+/// Drawn at one small size whatever the button's width, so they read like
+/// the system's own rather than stretching with the bar.
+fn drawCaptionGlyph(b: titlebar.Button, rect: pen.Rectangle, ink: pen.Color) void {
+    const size = @round(rect.height * 0.3);
+    const x = @round(rect.x + (rect.width - size) / 2);
+    const y = @round(rect.y + (rect.height - size) / 2);
+
+    switch (b) {
+        .minimize => pen.drawRectangleRec(.{ .x = x, .y = y + @round(size / 2), .width = size, .height = 1 }, ink),
+        .maximize => if (pen.isWindowMaximized()) {
+            // Restore: a second square peeking out from behind the first.
+            // Only the parts of the back one that would show are drawn.
+            const side = @round(size * 0.8);
+            const offset = size - side;
+            pen.drawRectangleRec(.{ .x = x + offset, .y = y, .width = side, .height = 1 }, ink);
+            pen.drawRectangleRec(.{ .x = x + size - 1, .y = y, .width = 1, .height = side }, ink);
+            pen.drawRectangleLinesEx(.{ .x = x, .y = y + offset, .width = side, .height = side }, 1, ink);
+        } else {
+            pen.drawRectangleLinesEx(.{ .x = x, .y = y, .width = size, .height = size }, 1, ink);
+        },
+        .close => {
+            pen.drawLineEx(.{ .x = x, .y = y }, .{ .x = x + size, .y = y + size }, 1.2, ink);
+            pen.drawLineEx(.{ .x = x + size, .y = y }, .{ .x = x, .y = y + size }, 1.2, ink);
+        },
+    }
+}
+
+/// A hairline round the edge. Without the system frame a dark window sits on
+/// a dark desktop with nothing to say where it stops. A maximised window
+/// fills the screen, so it has no edge to mark.
+fn drawFrame(l: Layout) void {
+    if (!app.window.custom_frame or pen.isWindowMaximized()) return;
+    const bounds = pen.Rectangle{
+        .x = 0,
+        .y = 0,
+        .width = l.menu.width,
+        .height = l.status.y + l.status.height,
+    };
+    pen.drawRectangleLinesEx(bounds, 1, theme.current.scrollbar);
 }
 
 fn drawDropdown(index: usize, l: Layout, cell: Metrics, point: pen.Vector2) void {
@@ -677,7 +751,7 @@ pub fn promptRowAt(point: pen.Vector2, l: Layout, cell: Metrics) ?usize {
 /// The layout for this frame, sized to the buffer that is showing.
 pub fn currentLayout() Layout {
     const lines = if (app.buffer.current()) |v| v.tree.lineCount() else 1;
-    return Layout.compute(app.font.metrics, lines, app.buffer.views.items.len > 0);
+    return Layout.compute(app.font.metrics, lines, app.buffer.views.items.len > 0, app.window.custom_frame);
 }
 
 /// How many whole columns of text fit across the text area.

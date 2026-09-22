@@ -178,6 +178,7 @@ expand_tabs = true
 wrap_lines = false
 show_hidden = false
 restore_session = true
+custom_titlebar = true  # false for your system's own window frame
 
 background = #181818
 text = #dedee6
@@ -188,6 +189,13 @@ caret = #78c8ff
 Every colour in the interface is settable; see the generated file for the full
 list. A line it cannot parse is reported and skipped, so a typo never stops the
 editor starting.
+
+Zimacs draws its own title bar by default, sharing the row with the menus.
+Drag the empty part of it to move the window, double-click it to maximise, and
+drag any edge to resize. The move is handed to Windows itself, or on Linux to
+the window manager, rather than done frame by frame. If your window manager
+does not cooperate, `custom_titlebar = false` brings the system frame back on
+the next start.
 
 ## How it is put together
 
