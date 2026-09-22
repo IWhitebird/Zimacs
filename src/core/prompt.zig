@@ -6,7 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { open, save_as, find, browse, save_into };
+pub const Kind = enum { open, save_as, find, browse, save_into, goto_line };
 
 /// Case-insensitive substring test, for narrowing the suggestion list.
 fn contains(haystack: []const u8, needle: []const u8) bool {
@@ -104,6 +104,7 @@ pub const Prompt = struct {
             .open => "Open: ",
             .save_as => "Save as: ",
             .find => "Find: ",
+            .goto_line => "Go to line: ",
             // The browsers show the directory they are in instead.
             .browse, .save_into => "",
         };

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  ZIG_VERSION: 0.16.0
+  # raylib links these directly. Zig only finds them through the host's own
+  # search paths, which is also why the Linux build must not pass -Dtarget.
+  LINUX_DEPS: >-
+    libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev
+    libxi-dev libxcursor-dev libxkbcommon-dev
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ${{ env.LINUX_DEPS }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build test --summary all
+
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig fmt --check src build.zig
+
+  build-linux:
+    name: Build linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ${{ env.LINUX_DEPS }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      # No -Dtarget: naming the target turns off the native library search.
+      - run: zig build -Doptimize=ReleaseFast
+
+  build-cross:
+    # These need no host libraries, so Zig cross-compiles them as-is.
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            target: x86_64-windows
+          - name: web
+            target: wasm32-emscripten
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast

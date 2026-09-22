@@ -1,0 +1,112 @@
+name: Release
+
+# Cut a release by tagging a commit:
+#   git tag v0.1.0 && git push origin v0.1.0
+# The tag must match the version in build.zig.zon, which is checked first.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  ZIG_VERSION: 0.16.0
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Tag matches build.zig.zon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          zon=$(grep -oP '\.version = "\K[^"]+' build.zig.zon)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "build.zig.zon: $zon"
+          echo "tag:           $tag"
+          if [ "$zon" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match build.zig.zon version $zon."
+            echo "::error::Bump build.zig.zon, or tag v$zon instead."
+            exit 1
+          fi
+
+  linux:
+    # Built on 22.04 rather than latest so the binary runs on older glibc too.
+    # No -Dtarget: naming the target turns off Zig's native library search,
+    # and raylib needs the host's GL and X11 libraries.
+    name: Build linux
+    needs: check-version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxi-dev libxcursor-dev libxkbcommon-dev
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - run: zig build -Doptimize=ReleaseFast
+
+      - name: Package
+        run: |
+          name="zimacs-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir -p "$name"
+          cp zig-out/bin/Zimacs README.md LICENSE "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          ls -la "$name.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux
+          path: zimacs-*.tar.gz*
+
+  windows:
+    # Cross-compiled: Windows needs nothing from the host.
+    name: Build windows
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - run: zig build -Dtarget=x86_64-windows -Doptimize=ReleaseFast
+
+      - name: Package
+        run: |
+          name="zimacs-${GITHUB_REF_NAME}-windows-x86_64"
+          mkdir -p "$name"
+          cp zig-out/bin/Zimacs.exe README.md LICENSE "$name/"
+          zip -qr "$name.zip" "$name"
+          sha256sum "$name.zip" > "$name.zip.sha256"
+          ls -la "$name.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: zimacs-*.zip*
+
+  publish:
+    name: Publish release
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name 'zimacs-*.tar.gz*' -o -name 'zimacs-*.zip*' \) \
+            -exec cp {} release/ \;
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

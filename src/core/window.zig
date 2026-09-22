@@ -12,7 +12,6 @@ const icon_data = @embedFile("icon_data");
 extern fn emscripten_get_element_css_size(target: [*:0]const u8, width: *f64, height: *f64) c_int;
 extern fn emscripten_get_device_pixel_ratio() f64;
 
-
 pub const Window = struct {
     title: [:0]const u8 = "Zimacs",
     width: i32 = 800,
@@ -32,7 +31,7 @@ pub const Window = struct {
     }
 
     pub fn init(ctx: *anyopaque) !void {
-        const w: *Self = @alignCast(@ptrCast(ctx));
+        const w: *Self = @ptrCast(@alignCast(ctx));
         // High-DPI is left off on the web: `fitToCanvas` already sizes the
         // buffer to the display's real pixels, and letting raylib scale as
         // well makes its screen size half the render size - which silently
@@ -55,7 +54,7 @@ pub const Window = struct {
     }
 
     pub fn render(ctx: *anyopaque) !void {
-        const w: *Self = @alignCast(@ptrCast(ctx));
+        const w: *Self = @ptrCast(@alignCast(ctx));
         if (pen.isWindowResized()) {
             w.width = pen.getRenderWidth();
             w.height = pen.getRenderHeight();

@@ -12,6 +12,7 @@ const std = @import("std");
 const tree_mod = @import("piecetree.zig");
 const PieceTree = tree_mod.PieceTree;
 const Position = tree_mod.Position;
+const isWord = @import("text.zig").isWord;
 
 pub const Range = struct {
     start: u32,
@@ -137,9 +138,21 @@ pub const Cursor = struct {
         c.moveLines(tree, @as(i64, lines), extend);
     }
 
+    /// Home goes to the first non-blank character, and only to column 0 if it
+    /// is already there. Pressing it twice gets you to the true start.
     pub fn home(c: *Self, tree: *const PieceTree, extend: bool) void {
         c.mark(extend);
-        c.offset = tree.lineStart(c.position(tree).line);
+        const line = c.position(tree).line;
+        const start = tree.lineStart(line);
+        const stop = tree.lineEnd(line);
+
+        var indented = start;
+        while (indented < stop) : (indented += 1) {
+            const byte = tree.byteAt(indented) orelse break;
+            if (byte != ' ' and byte != '\t') break;
+        }
+
+        c.offset = if (c.offset == indented) start else indented;
         c.resetGoal(tree);
     }
 
@@ -222,10 +235,6 @@ fn isTrailing(byte: u8) bool {
     return byte & 0b1100_0000 == 0b1000_0000;
 }
 
-fn isWord(byte: u8) bool {
-    return byte == '_' or std.ascii.isAlphanumeric(byte) or byte >= 0x80;
-}
-
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
@@ -283,6 +292,19 @@ test "home and end" {
     try testing.expectEqual(@as(u32, 6), c.offset);
     c.end(&tree, false);
     try testing.expectEqual(@as(u32, 11), c.offset);
+}
+
+test "home stops at the indent first, then the true start" {
+    var tree = try treeOf("    indented");
+    defer tree.deinit();
+    var c = Cursor{ .offset = 9 };
+
+    c.home(&tree, false);
+    try testing.expectEqual(@as(u32, 4), c.offset); // first non-blank
+    c.home(&tree, false);
+    try testing.expectEqual(@as(u32, 0), c.offset); // column 0
+    c.home(&tree, false);
+    try testing.expectEqual(@as(u32, 4), c.offset); // and back
 }
 
 test "display position is 1-based" {

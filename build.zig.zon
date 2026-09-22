@@ -1,6 +1,6 @@
 .{
     .name = .zimacs,
-    .version = "0.2.0",
+    .version = "0.1.0",
     .fingerprint = 0x88dc0c13b9ec9c7b,
     .minimum_zig_version = "0.16.0",
 

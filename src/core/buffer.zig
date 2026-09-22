@@ -14,6 +14,7 @@ const Artifact = @import("artifact.zig").Artifact;
 const PieceTree = @import("piecetree.zig").PieceTree;
 const Cursor = @import("cursor.zig").Cursor;
 const History = @import("history.zig").History;
+const text_mod = @import("text.zig");
 
 /// Refuse anything larger. Piece tree offsets are u32, so 4 GiB is the hard
 /// ceiling; this sits well below it.
@@ -99,6 +100,184 @@ pub const BufferView = struct {
         try v.edit(v.cursor.offset, v.charEndAfter(v.cursor.offset) - v.cursor.offset, "");
     }
 
+    /// Deletes the word before the caret, the way Ctrl+Backspace does: any
+    /// run of spaces first, then the word itself.
+    pub fn deleteWordBefore(v: *Self) !void {
+        if (v.cursor.selection()) |r| return v.edit(r.start, r.len(), "");
+        if (v.cursor.offset == 0) return;
+
+        var at = v.cursor.offset;
+        while (at > 0 and !text_mod.isWord(v.tree.byteAt(at - 1) orelse 0)) at -= 1;
+        while (at > 0 and text_mod.isWord(v.tree.byteAt(at - 1) orelse 0)) at -= 1;
+        // A run of spaces alone still deletes something.
+        if (at == v.cursor.offset) at -= 1;
+        try v.edit(at, v.cursor.offset - at, "");
+    }
+
+    pub fn deleteWordAfter(v: *Self) !void {
+        if (v.cursor.selection()) |r| return v.edit(r.start, r.len(), "");
+        const total = v.tree.len();
+        if (v.cursor.offset >= total) return;
+
+        var at = v.cursor.offset;
+        while (at < total and text_mod.isWord(v.tree.byteAt(at) orelse 0)) at += 1;
+        while (at < total and !text_mod.isWord(v.tree.byteAt(at) orelse 0)) at += 1;
+        if (at == v.cursor.offset) at += 1;
+        try v.edit(v.cursor.offset, at - v.cursor.offset, "");
+    }
+
+    /// Removes the caret's line, newline included.
+    pub fn deleteLine(v: *Self) !void {
+        const line = v.cursorLine();
+        const start = v.tree.lineStart(line);
+        const end = @min(v.tree.lineEnd(line) + 1, v.tree.len());
+        try v.edit(start, end - start, "");
+    }
+
+    /// Copies the caret's line onto the line below it.
+    pub fn duplicateLine(v: *Self) !void {
+        const line = v.cursorLine();
+        const start = v.tree.lineStart(line);
+        const end = v.tree.lineEnd(line);
+
+        var copied: std.ArrayList(u8) = .empty;
+        defer copied.deinit(v.gpa);
+        try copied.append(v.gpa, '\n');
+        if (end > start) try v.tree.copy(start, end - start, &copied);
+
+        const was = v.cursor.offset;
+        try v.edit(end, 0, copied.items);
+        // Stay on the same column, one line further down.
+        v.cursor.offset = was + @as(u32, @intCast(copied.items.len));
+        v.cursor.afterEdit(&v.tree);
+    }
+
+    /// Swaps the caret's line with the one above or below, taking the caret
+    /// with it.
+    pub fn moveLine(v: *Self, direction: enum { up, down }) !void {
+        const line = v.cursorLine();
+        const last = v.tree.lineCount() - 1;
+        if (direction == .up and line == 0) return;
+        if (direction == .down and line >= last) return;
+
+        const first = if (direction == .up) line - 1 else line;
+        const column = v.cursor.offset - v.tree.lineStart(line);
+
+        const start = v.tree.lineStart(first);
+        const end = @min(v.tree.lineEnd(first + 1) + 1, v.tree.len());
+
+        var upper: std.ArrayList(u8) = .empty;
+        defer upper.deinit(v.gpa);
+        var lower: std.ArrayList(u8) = .empty;
+        defer lower.deinit(v.gpa);
+
+        const middle = v.tree.lineStart(first + 1);
+        try v.tree.copy(start, middle - start, &upper);
+        try v.tree.copy(middle, end - middle, &lower);
+
+        // The pair is rewritten in one edit, so one undo puts it back.
+        var swapped: std.ArrayList(u8) = .empty;
+        defer swapped.deinit(v.gpa);
+        try swapped.appendSlice(v.gpa, trimNewline(lower.items));
+        try swapped.append(v.gpa, '\n');
+        try swapped.appendSlice(v.gpa, trimNewline(upper.items));
+        if (end == v.tree.len() and !endsWithNewline(lower.items)) {
+            // Nothing: the block did not end in a newline, so neither does it now.
+        } else {
+            try swapped.append(v.gpa, '\n');
+        }
+
+        try v.edit(start, end - start, swapped.items);
+
+        const moved = if (direction == .up) first else first + 1;
+        v.cursor.offset = v.tree.lineStart(moved) + @min(column, v.tree.lineLen(moved));
+        v.cursor.afterEdit(&v.tree);
+    }
+
+    /// Starts a fresh line below the caret's, wherever the caret sits.
+    pub fn openLineBelow(v: *Self) !void {
+        const end = v.tree.lineEnd(v.cursorLine());
+        try v.edit(end, 0, "\n");
+    }
+
+    /// Starts a fresh line above the caret's.
+    pub fn openLineAbove(v: *Self) !void {
+        const start = v.tree.lineStart(v.cursorLine());
+        try v.edit(start, 0, "\n");
+        v.cursor.offset = start;
+        v.cursor.afterEdit(&v.tree);
+    }
+
+    /// The lines the selection touches, or just the caret's line.
+    pub fn selectedLines(v: *const Self) struct { first: u32, last: u32 } {
+        const range = v.cursor.selection() orelse {
+            const line = v.cursorLine();
+            return .{ .first = line, .last = line };
+        };
+        const first = v.tree.positionAt(range.start).line;
+        var last = v.tree.positionAt(range.end).line;
+        // A selection ending exactly at a line start does not include it.
+        if (last > first and range.end == v.tree.lineStart(last)) last -= 1;
+        return .{ .first = first, .last = last };
+    }
+
+    /// Adds `width` spaces to the front of every selected line, as one edit so
+    /// a single undo takes it back.
+    pub fn indentLines(v: *Self, width: u8) !void {
+        const lines = v.selectedLines();
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(v.gpa);
+
+        var line = lines.first;
+        while (line <= lines.last) : (line += 1) {
+            try out.appendNTimes(v.gpa, ' ', width);
+            try v.appendLineWithBreak(&out, line, lines.last);
+        }
+        try v.replaceLines(lines.first, lines.last, out.items);
+    }
+
+    /// Removes up to `width` leading spaces (or one tab) from every selected
+    /// line.
+    pub fn outdentLines(v: *Self, width: u8) !void {
+        const lines = v.selectedLines();
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(v.gpa);
+
+        var line = lines.first;
+        while (line <= lines.last) : (line += 1) {
+            var body: std.ArrayList(u8) = .empty;
+            defer body.deinit(v.gpa);
+            try v.tree.lineContent(line, &body);
+
+            var strip: usize = 0;
+            if (body.items.len > 0 and body.items[0] == '\t') {
+                strip = 1;
+            } else {
+                while (strip < width and strip < body.items.len and body.items[strip] == ' ') strip += 1;
+            }
+            try out.appendSlice(v.gpa, body.items[strip..]);
+            if (line < lines.last or v.tree.lineEnd(line) < v.tree.len()) try out.append(v.gpa, '\n');
+        }
+        try v.replaceLines(lines.first, lines.last, out.items);
+    }
+
+    fn appendLineWithBreak(v: *Self, out: *std.ArrayList(u8), line: u32, last: u32) !void {
+        const start = v.tree.lineStart(line);
+        const end = v.tree.lineEnd(line);
+        if (end > start) try v.tree.copy(start, end - start, out);
+        if (line < last or end < v.tree.len()) try out.append(v.gpa, '\n');
+    }
+
+    /// Rewrites a run of lines in one edit, keeping the selection over them.
+    fn replaceLines(v: *Self, first: u32, last: u32, replacement: []const u8) !void {
+        const start = v.tree.lineStart(first);
+        const end = @min(v.tree.lineEnd(last) + 1, v.tree.len());
+        try v.edit(start, end - start, replacement);
+
+        v.cursor.anchor = start;
+        v.cursor.offset = start + @as(u32, @intCast(replacement.len));
+    }
+
     pub fn deleteSelection(v: *Self) !void {
         const r = v.cursor.selection() orelse return;
         try v.edit(r.start, r.len(), "");
@@ -167,7 +346,7 @@ pub const Buffer = struct {
     }
 
     pub fn deinit(ctx: *anyopaque) !void {
-        const b: *Self = @alignCast(@ptrCast(ctx));
+        const b: *Self = @ptrCast(@alignCast(ctx));
         for (b.views.items) |v| {
             v.deinit();
             b.gpa.destroy(v);
@@ -294,6 +473,14 @@ pub const Buffer = struct {
         try b.save(view);
     }
 };
+
+fn trimNewline(line: []const u8) []const u8 {
+    return if (endsWithNewline(line)) line[0 .. line.len - 1] else line;
+}
+
+fn endsWithNewline(line: []const u8) bool {
+    return line.len > 0 and line[line.len - 1] == '\n';
+}
 
 /// A UTF-8 byte that continues the character before it.
 fn isTrailingByte(byte: u8) bool {
@@ -482,6 +669,183 @@ test "undoing back to the saved point clears the edited flag" {
 
     try v.undo();
     try testing.expect(!v.edited());
+}
+
+test "deleteWordBefore takes the word and the spaces before it" {
+    var v = try testView("hello big world");
+    defer v.deinit();
+    v.cursor.offset = 15;
+
+    try v.deleteWordBefore();
+    var text = try textOf(&v);
+    try testing.expectEqualSlices(u8, "hello big ", text);
+    testing.allocator.free(text);
+
+    try v.deleteWordBefore();
+    text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "hello ", text);
+}
+
+test "deleteWordBefore stops at the start" {
+    var v = try testView("abc");
+    defer v.deinit();
+    v.cursor.offset = 0;
+    try v.deleteWordBefore();
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "abc", text);
+}
+
+test "deleteWordAfter takes the word and the spaces after it" {
+    var v = try testView("hello big world");
+    defer v.deinit();
+    v.cursor.offset = 0;
+
+    try v.deleteWordAfter();
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "big world", text);
+}
+
+test "deleteLine removes the whole line" {
+    var v = try testView("one\ntwo\nthree\n");
+    defer v.deinit();
+    v.cursor.offset = 5; // on "two"
+
+    try v.deleteLine();
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\nthree\n", text);
+}
+
+test "duplicateLine copies it below and keeps the column" {
+    var v = try testView("one\ntwo\n");
+    defer v.deinit();
+    v.cursor.offset = 5; // column 1 of "two"
+
+    try v.duplicateLine();
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\ntwo\ntwo\n", text);
+    try testing.expectEqual(@as(u32, 2), v.cursorLine());
+    try testing.expectEqual(@as(u32, 1), v.cursor.position(&v.tree).column);
+}
+
+test "moveLine swaps with the neighbour and carries the caret" {
+    var v = try testView("one\ntwo\nthree\n");
+    defer v.deinit();
+    v.cursor.offset = 4; // start of "two"
+
+    try v.moveLine(.up);
+    var text = try textOf(&v);
+    try testing.expectEqualSlices(u8, "two\none\nthree\n", text);
+    try testing.expectEqual(@as(u32, 0), v.cursorLine());
+    testing.allocator.free(text);
+
+    try v.moveLine(.down);
+    text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\ntwo\nthree\n", text);
+    try testing.expectEqual(@as(u32, 1), v.cursorLine());
+}
+
+test "moveLine does nothing at the ends" {
+    var v = try testView("one\ntwo\n");
+    defer v.deinit();
+
+    v.cursor.offset = 0;
+    try v.moveLine(.up);
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\ntwo\n", text);
+}
+
+test "openLineBelow starts a new line from anywhere on the line" {
+    var v = try testView("hello");
+    defer v.deinit();
+    v.cursor.offset = 2;
+
+    try v.openLineBelow();
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "hello\n", text);
+    try testing.expectEqual(@as(u32, 1), v.cursorLine());
+}
+
+test "openLineAbove puts the caret on the new line" {
+    var v = try testView("one\ntwo\n");
+    defer v.deinit();
+    v.cursor.offset = 5; // on "two"
+
+    try v.openLineAbove();
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\n\ntwo\n", text);
+    try testing.expectEqual(@as(u32, 1), v.cursorLine());
+}
+
+test "selectedLines covers what the selection touches" {
+    var v = try testView("one\ntwo\nthree\nfour\n");
+    defer v.deinit();
+
+    v.cursor.offset = 5;
+    var lines = v.selectedLines();
+    try testing.expectEqual(@as(u32, 1), lines.first);
+    try testing.expectEqual(@as(u32, 1), lines.last);
+
+    v.cursor.anchor = 5; // inside "two"
+    v.cursor.offset = 10; // inside "three"
+    lines = v.selectedLines();
+    try testing.expectEqual(@as(u32, 1), lines.first);
+    try testing.expectEqual(@as(u32, 2), lines.last);
+
+    // Ending exactly on a line start does not pull that line in.
+    v.cursor.anchor = 4;
+    v.cursor.offset = 8;
+    lines = v.selectedLines();
+    try testing.expectEqual(@as(u32, 1), lines.first);
+    try testing.expectEqual(@as(u32, 1), lines.last);
+}
+
+test "indent and outdent a block" {
+    var v = try testView("one\ntwo\nthree\n");
+    defer v.deinit();
+    v.cursor.anchor = 0;
+    v.cursor.offset = 8; // "one" and "two"
+
+    try v.indentLines(2);
+    var text = try textOf(&v);
+    try testing.expectEqualSlices(u8, "  one\n  two\nthree\n", text);
+    testing.allocator.free(text);
+
+    try v.outdentLines(2);
+    text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\ntwo\nthree\n", text);
+}
+
+test "outdent removes a tab or stops at the margin" {
+    var v = try testView("\ttabbed\n  spaced\nflush\n");
+    defer v.deinit();
+    v.cursor.anchor = 0;
+    v.cursor.offset = v.tree.len();
+
+    try v.outdentLines(4);
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "tabbed\nspaced\nflush\n", text);
+}
+
+test "indent with no selection does the caret's line only" {
+    var v = try testView("one\ntwo\n");
+    defer v.deinit();
+    v.cursor.offset = 5;
+
+    try v.indentLines(4);
+    const text = try textOf(&v);
+    defer testing.allocator.free(text);
+    try testing.expectEqualSlices(u8, "one\n    two\n", text);
 }
 
 test "toUnixNewlines" {

@@ -63,21 +63,55 @@ unavailable there; everything else works.
 
 ## Keys
 
+**Editing**
+
+| | |
+|---|---|
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| `Ctrl+X` `Ctrl+C` `Ctrl+V` | cut, copy, paste |
+| `Ctrl+Backspace` / `Ctrl+Delete` | delete a word |
+| `Tab` / `Shift+Tab` | indent / outdent (the whole selection) |
+| `Ctrl+D` / `Ctrl+Shift+K` | duplicate / delete line |
+| `Alt+Up` / `Alt+Down` | move the line |
+| `Ctrl+Enter` / `Ctrl+Shift+Enter` | open a line below / above |
+
+**Moving and selecting**
+
+| | |
+|---|---|
+| `Shift` + any movement | extend the selection |
+| `Ctrl+Left` / `Ctrl+Right` | move by word |
+| `Home` | first non-blank, then column 0 |
+| `Ctrl+Home` / `Ctrl+End` | start / end of file |
+| `Ctrl+A` / `Ctrl+L` | select all / select line |
+| `Ctrl+G` | go to line |
+| double / triple click | select word / line |
+| click the gutter | select that line |
+
+**Finding**
+
+| | |
+|---|---|
+| `Ctrl+F` | find |
+| `F3` / `Shift+F3` | next / previous match |
+
+**Files and tabs**
+
 | | |
 |---|---|
 | `Ctrl+N` / `Ctrl+W` | new tab / close tab |
-| `Ctrl+O` | open, via the file browser |
-| `Ctrl+R` | open a recent file |
+| `Ctrl+O` / `Ctrl+R` | open (file browser) / recent files |
 | `Ctrl+S` / `Ctrl+Shift+S` | save / save as |
-| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
-| `Ctrl+X` `Ctrl+C` `Ctrl+V` | cut, copy, paste |
-| `Ctrl+A` / `Ctrl+L` | select all / select line |
-| `Ctrl+F` / `F3` / `Shift+F3` | find / next / previous |
-| `Ctrl+Tab` / `Ctrl+PageUp/Down` | switch tab |
-| `Ctrl` `+` `-` `0` | zoom in, out, reset |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | next / previous tab |
+| `Ctrl+1` … `Ctrl+9` | jump to a tab (`Ctrl+9` = last) |
 | `Ctrl+,` | edit settings |
-| `Ctrl+Left/Right` | move by word |
-| `Shift` + any movement | extend the selection |
+
+**View**
+
+| | |
+|---|---|
+| `Ctrl` `+` `-` `0` | zoom in, out, reset |
+| wheel / `Shift`+wheel | scroll / scroll sideways |
 
 ## Settings
 

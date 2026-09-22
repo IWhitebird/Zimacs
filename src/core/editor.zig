@@ -44,7 +44,7 @@ pub const Editor = struct {
     }
 
     pub fn deinit(ctx: *anyopaque) !void {
-        const e: *Self = @alignCast(@ptrCast(ctx));
+        const e: *Self = @ptrCast(@alignCast(ctx));
         e.raw.deinit(app.gpa);
         e.shown.deinit(app.gpa);
         e.status.deinit(app.gpa);
@@ -52,7 +52,7 @@ pub const Editor = struct {
     }
 
     pub fn render(ctx: *anyopaque) !void {
-        const e: *Self = @alignCast(@ptrCast(ctx));
+        const e: *Self = @ptrCast(@alignCast(ctx));
         const cell = app.font.metrics;
         const l = currentLayout();
 

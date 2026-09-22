@@ -3,13 +3,20 @@
 //!   typing                        inserts text, replacing any selection
 //!   Shift + any movement          extends the selection
 //!   Ctrl+Left / Ctrl+Right        move by word
-//!   Ctrl+A / C / X / V            select all, copy, cut, paste
-//!   Ctrl+Z / Ctrl+Y               undo, redo
-//!   Ctrl+S / Ctrl+Shift+S         save, save as
-//!   Ctrl+F / F3 / Shift+F3        find, next match, previous match
-//!   Ctrl+O / Ctrl+R / Ctrl+,      open by path, recent file, settings
-//!   Ctrl+N / Ctrl+W               new tab, close tab
-//!   Ctrl+Tab / Ctrl+PageUp/Down   switch tab
+//!   Home                          first non-blank, then column 0
+//!   Ctrl+Home / Ctrl+End          start / end of file
+//!   Ctrl+Backspace / Ctrl+Delete  delete a word
+//!   Tab / Shift+Tab               indent / outdent
+//!   Ctrl+Enter / Ctrl+Shift+Enter open a line below / above
+//!   Ctrl+D / Ctrl+Shift+K         duplicate / delete line
+//!   Alt+Up / Alt+Down             move the line
+//!   Ctrl+A C X V Z Y L            select all, copy, cut, paste, undo, redo, select line
+//!   Ctrl+F / F3 / Shift+F3        find, next, previous
+//!   Ctrl+G                        go to line
+//!   Ctrl+S / Ctrl+Shift+S         save / save as
+//!   Ctrl+O / Ctrl+R / Ctrl+,      open, recent, settings
+//!   Ctrl+N / Ctrl+W               new tab / close tab
+//!   Ctrl+Tab / Ctrl+1..9          switch tab
 //!   Ctrl with  +  -  0            zoom in, out, reset
 //!   click, drag, double, triple   place caret, select, select word or line
 //!   mouse wheel                   scroll, Shift for sideways
@@ -35,7 +42,6 @@ var click_streak: u8 = 0;
 var dragging = false;
 var dragging_bar = false;
 var dragging_hbar = false;
-
 
 pub const Input = struct {
     const Self = @This();
@@ -127,6 +133,10 @@ fn shiftDown() bool {
     return pen.isKeyDown(.left_shift) or pen.isKeyDown(.right_shift);
 }
 
+fn altDown() bool {
+    return pen.isKeyDown(.left_alt) or pen.isKeyDown(.right_alt);
+}
+
 /// One screen of lines, minus one so you keep your place while reading.
 fn pageRows() u32 {
     const rows = editor.currentLayout().rows(app.font.metrics);
@@ -181,7 +191,12 @@ fn typeText() !void {
 
     if (pressed(.enter) or pressed(.kp_enter)) try view.insert("\n");
     if (pressed(.tab)) {
-        if (app.config.expand_tabs) {
+        // With a selection, Tab shifts the whole block rather than replacing it.
+        if (view.cursor.hasSelection()) {
+            try commands.run(if (shiftDown()) .outdent else .indent);
+        } else if (shiftDown()) {
+            try commands.run(.outdent);
+        } else if (app.config.expand_tabs) {
             var spaces: [16]u8 = undefined;
             const width = @min(app.config.tab_width, spaces.len);
             @memset(spaces[0..width], ' ');
@@ -197,6 +212,12 @@ fn typeText() !void {
 // ----------------------------------------------------------- shortcuts
 
 fn shortcuts() !void {
+    // Alt is only used for moving lines about.
+    if (altDown() and !ctrlDown()) {
+        if (pressed(.up)) try commands.run(.move_line_up);
+        if (pressed(.down)) try commands.run(.move_line_down);
+        return;
+    }
     if (!ctrlDown()) return;
     const shift = shiftDown();
 
@@ -208,22 +229,44 @@ fn shortcuts() !void {
         if (shift) app.buffer.previous() else app.buffer.next();
     }
     if (pressed(.page_up)) app.buffer.previous();
+    selectTabByNumber();
 
     if (pressed(.n)) try commands.run(.new_tab);
     if (pressed(.w)) try commands.run(.close_tab);
     if (pressed(.o)) try commands.run(.open_file);
     if (pressed(.r)) try commands.run(.open_recent);
     if (pressed(.f)) try commands.run(.find);
+    if (pressed(.g)) try commands.run(.goto_line);
     if (pressed(.a)) try commands.run(.select_all);
+    if (pressed(.l)) if (app.buffer.current()) |v| v.cursor.selectLine(&v.tree);
     if (pressed(.c)) try commands.run(.copy);
     if (pressed(.x)) try commands.run(.cut);
     if (pressed(.v)) try commands.run(.paste);
     if (pressed(.y)) try commands.run(.redo);
     if (pressed(.z)) try commands.run(if (shift) .redo else .undo);
     if (pressed(.s)) try commands.run(if (shift) .save_as else .save);
-
     if (pressed(.comma)) try commands.run(.open_config);
-    if (pressed(.l)) if (app.buffer.current()) |v| v.cursor.selectLine(&v.tree);
+
+    if (pressed(.d)) try commands.run(.duplicate_line);
+    if (shift and pressed(.k)) try commands.run(.delete_line);
+    if (pressed(.enter) or pressed(.kp_enter)) {
+        try commands.run(if (shift) .open_line_above else .open_line_below);
+    }
+
+    // Word-wise deletion. These live here because they need Ctrl held.
+    if (pressed(.backspace)) if (app.buffer.current()) |v| try v.deleteWordBefore();
+    if (pressed(.delete)) if (app.buffer.current()) |v| try v.deleteWordAfter();
+}
+
+/// Ctrl+1 to Ctrl+9 jump straight to a tab, Ctrl+9 meaning the last one.
+fn selectTabByNumber() void {
+    const digits = [_]pen.KeyboardKey{ .one, .two, .three, .four, .five, .six, .seven, .eight };
+    for (digits, 0..) |key, index| {
+        if (pressed(key)) app.buffer.select(index);
+    }
+    if (pressed(.nine) and app.buffer.views.items.len > 0) {
+        app.buffer.select(app.buffer.views.items.len - 1);
+    }
 }
 
 /// F3 and Shift+F3 repeat the last search without reopening the prompt.
@@ -247,14 +290,23 @@ fn mouse() !void {
             app.buffer.select(index);
             return;
         }
-        if (pen.checkCollisionPointRec(point, l.scrollbar)) {
+        // A scrollbar only takes the press when it actually has a thumb.
+        // Otherwise its track is an invisible strip that swallows clicks
+        // meant for the text underneath it.
+        if (onScrollbar(point, l, .vertical)) {
             dragging_bar = true;
             scrollTo(point, l);
             return;
         }
-        if (pen.checkCollisionPointRec(point, layout_mod.horizontalTrack(l))) {
+        if (onScrollbar(point, l, .horizontal)) {
             dragging_hbar = true;
             scrollSidewaysTo(point, l);
+            return;
+        }
+        // The gutter counts as part of the line: clicking it selects that
+        // line, which is what every other editor does.
+        if (pen.checkCollisionPointRec(point, l.gutter)) {
+            beginGutterClick(point, l);
             return;
         }
         if (pen.checkCollisionPointRec(point, l.text)) {
@@ -287,6 +339,36 @@ fn mouse() !void {
     }
 }
 
+const Bar = enum { vertical, horizontal };
+
+/// True only when that scrollbar actually has a thumb to grab.
+///
+/// Without this check its track is an invisible strip that swallows presses
+/// meant for the text underneath it.
+fn onScrollbar(point: pen.Vector2, l: layout_mod.Layout, which: Bar) bool {
+    const view = app.buffer.current() orelse return false;
+    const cell = app.font.metrics;
+    return switch (which) {
+        .vertical => pen.checkCollisionPointRec(point, l.scrollbar) and
+            layout_mod.thumb(l.scrollbar, view.top_line, l.rows(cell), view.tree.lineCount()) != null,
+        .horizontal => blk: {
+            const track = layout_mod.horizontalTrack(l);
+            const visible = editor.visibleColumns(l, cell);
+            break :blk pen.checkCollisionPointRec(point, track) and
+                layout_mod.horizontalThumb(track, view.left_column, visible, view.content_columns) != null;
+        },
+    };
+}
+
+/// Clicking a line number selects that line, and dragging from there keeps
+/// extending - which is what every other editor does with its gutter.
+fn beginGutterClick(point: pen.Vector2, l: layout_mod.Layout) void {
+    const view = app.buffer.current() orelse return;
+    view.cursor.moveTo(&view.tree, offsetAt(view, point, l), shiftDown());
+    view.cursor.selectLine(&view.tree);
+    dragging = true;
+}
+
 fn beginClick(point: pen.Vector2, l: @import("layout.zig").Layout) void {
     const view = app.buffer.current() orelse return;
 
@@ -303,10 +385,14 @@ fn beginClick(point: pen.Vector2, l: @import("layout.zig").Layout) void {
         2 => {
             view.cursor.moveTo(&view.tree, offset, false);
             view.cursor.selectWord(&view.tree);
+            // Keep dragging live, so holding after a double click carries on
+            // extending the selection.
+            dragging = true;
         },
         else => {
             view.cursor.moveTo(&view.tree, offset, false);
             view.cursor.selectLine(&view.tree);
+            dragging = true;
             click_streak = 0;
         },
     }
@@ -447,6 +533,7 @@ fn commitPrompt() !void {
             try commands.setQuery(chosen);
             commands.search(.forward) catch |err| report("Search failed", err);
         },
+        .goto_line => commands.gotoLine(chosen),
     }
 }
 

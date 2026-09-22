@@ -38,7 +38,21 @@ pub fn run(action: Action) !void {
             try v.deleteSelection();
         },
         .paste => if (app.buffer.current()) |v| try paste(v),
-        .select_all => if (app.buffer.current()) |v| v.cursor.selectAll(&v.tree),
+        .select_all => if (app.buffer.current()) |v| {
+            v.cursor.selectAll(&v.tree);
+            // Selecting everything should not throw the view to the bottom of
+            // the file, which is what following the caret would do.
+            v.followed = v.cursor.offset;
+        },
+        .delete_line => if (app.buffer.current()) |v| try v.deleteLine(),
+        .duplicate_line => if (app.buffer.current()) |v| try v.duplicateLine(),
+        .move_line_up => if (app.buffer.current()) |v| try v.moveLine(.up),
+        .move_line_down => if (app.buffer.current()) |v| try v.moveLine(.down),
+        .open_line_below => if (app.buffer.current()) |v| try v.openLineBelow(),
+        .open_line_above => if (app.buffer.current()) |v| try v.openLineAbove(),
+        .indent => if (app.buffer.current()) |v| try v.indentLines(app.config.tab_width),
+        .outdent => if (app.buffer.current()) |v| try v.outdentLines(app.config.tab_width),
+        .goto_line => try app.prompt.begin(.goto_line, ""),
         .find => try app.prompt.begin(.find, query.items),
 
         .zoom_in => try app.font.zoomIn(),
@@ -181,6 +195,17 @@ pub fn search(direction: Direction) !void {
     view.cursor.moveTo(&view.tree, found, false);
     view.cursor.anchor = found;
     view.cursor.offset = found + @as(u32, @intCast(query.items.len));
+}
+
+/// Jumps to a 1-based line number typed into the prompt.
+pub fn gotoLine(typed: []const u8) void {
+    const view = app.buffer.current() orelse return;
+    const wanted = std.fmt.parseInt(u32, std.mem.trim(u8, typed, " "), 10) catch {
+        report("Not a line number", error.InvalidCharacter);
+        return;
+    };
+    const line = @min(wanted -| 1, view.tree.lineCount() - 1);
+    view.cursor.moveTo(&view.tree, view.tree.lineStart(line), false);
 }
 
 fn report(what: []const u8, err: anyerror) void {

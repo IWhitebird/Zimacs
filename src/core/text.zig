@@ -13,6 +13,12 @@ pub fn isTrailing(byte: u8) bool {
     return byte & 0b1100_0000 == 0b1000_0000;
 }
 
+/// Part of a word, for word-wise movement and deletion. Bytes above ASCII
+/// count as word characters so accented and non-Latin text holds together.
+pub fn isWord(byte: u8) bool {
+    return byte == '_' or std.ascii.isAlphanumeric(byte) or byte >= 0x80;
+}
+
 /// How many cells a character takes. Emoji are drawn double-width, the way a
 /// terminal does, because their glyphs are square while the text font is not.
 pub fn columnsFor(codepoint: u21) u32 {
@@ -109,6 +115,18 @@ fn tabAdvance(column: u32, tab_width: u8) u32 {
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+
+test "word characters" {
+    try testing.expect(isWord('a'));
+    try testing.expect(isWord('Z'));
+    try testing.expect(isWord('7'));
+    try testing.expect(isWord('_'));
+    try testing.expect(!isWord(' '));
+    try testing.expect(!isWord('.'));
+    try testing.expect(!isWord('\n'));
+    // A continuation byte of an accented letter.
+    try testing.expect(isWord(0xC3));
+}
 
 test "plain ascii is one column per byte" {
     try testing.expectEqual(@as(u32, 0), columnOf("hello", 0, 4));
