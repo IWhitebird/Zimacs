@@ -71,6 +71,9 @@ pub const Metrics = struct {
 
 pub const Font = struct {
     size: f32 = default_size,
+    /// The size from the settings: what Ctrl+0 goes back to, and what the
+    /// saved zoom is measured from.
+    base: f32 = default_size,
     spacing: f32 = 0,
     handle: pen.Font = undefined,
     /// Second atlas, for the emoji the text font has no glyphs for.
@@ -137,7 +140,12 @@ pub const Font = struct {
     }
 
     pub fn zoomReset(f: *Self) !void {
-        try f.setSize(default_size);
+        try f.setSize(f.base);
+    }
+
+    /// How far the text is zoomed from the configured size.
+    pub fn zoom(f: Self) f32 {
+        return f.size - f.base;
     }
 
     /// Width of `s` as it will be drawn.

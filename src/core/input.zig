@@ -45,13 +45,7 @@ var click_streak: u8 = 0;
 var dragging = false;
 var dragging_bar = false;
 var dragging_hbar = false;
-/// A window button is only pressed if the release lands on it too, the way
-/// every desktop's own buttons behave.
-var armed_button: ?titlebar.Button = null;
-var last_caption_press: f64 = -1;
-/// raylib makes a new system cursor each time it is set, so it is only set
-/// when the shape actually changes.
-var cursor_shape: pen.MouseCursor = .default;
+var caption = Caption{};
 
 pub const Input = struct {
     const Self = @This();
@@ -76,9 +70,8 @@ pub const Input = struct {
 
     pub fn render(ctx: *anyopaque) !void {
         _ = ctx;
-        // Ahead of everything else, so a prompt or the About panel never
-        // stops you moving, resizing or closing the window.
-        if (handleTitlebar()) return;
+        // First, so prompts and panels never block moving or closing.
+        if (caption.handle()) return;
         if (app.prompt.active) {
             try runPrompt();
             return;
@@ -93,66 +86,73 @@ pub const Input = struct {
     }
 };
 
-/// Moves, resizes, maximises and closes the window when Zimacs draws its own
-/// title bar. Returns true when it has taken this frame's pointer.
-fn handleTitlebar() bool {
-    const w = &app.window;
-    if (!w.custom_frame) return false;
+/// Pointer handling for the custom title bar and window edges.
+const Caption = struct {
+    /// A button fires only if released over the button it was pressed on.
+    armed: ?titlebar.Button = null,
+    last_press: f64 = -1,
+    /// raylib creates a new system cursor on every set, so only set changes.
+    cursor: pen.MouseCursor = .default,
 
-    const l = editor.currentLayout();
-    const point = pen.getMousePosition();
+    /// True when it has taken this frame's pointer.
+    fn handle(c: *Caption) bool {
+        const w = &app.window;
+        if (!w.custom_frame) return false;
 
-    if (w.drag != null) {
-        if (pen.isMouseButtonDown(.left)) w.continueDrag() else w.endDrag();
-        return true;
+        if (w.drag != null) {
+            if (pen.isMouseButtonDown(.left)) w.continueDrag() else w.endDrag();
+            return true;
+        }
+
+        const l = editor.currentLayout();
+        const point = pen.getMousePosition();
+        const edges = if (pen.isWindowMaximized()) titlebar.Edges{} else titlebar.edgesAt(point, l);
+        c.setCursor(if (edges.any()) edges.cursor() else .default);
+
+        if (pen.isMouseButtonPressed(.left)) return c.press(point, l, edges);
+        if (c.armed) |armed| {
+            if (!pen.isMouseButtonReleased(.left)) return true;
+            c.armed = null;
+            if (titlebar.buttonAt(point, l) == armed) switch (armed) {
+                .minimize => w.minimize(),
+                .maximize => w.toggleMaximize(),
+                .close => w.close_requested = true,
+            };
+            return true;
+        }
+        return false;
     }
 
-    const maximized = pen.isWindowMaximized();
-    const edges = if (maximized) titlebar.Edges{} else titlebar.edgesAt(point, l);
-    setCursor(if (edges.any()) edges.cursor() else .default);
-
-    if (pen.isMouseButtonPressed(.left)) {
+    fn press(c: *Caption, point: pen.Vector2, l: layout_mod.Layout, edges: titlebar.Edges) bool {
+        const w = &app.window;
         if (edges.any()) {
             w.beginResize(edges);
             return true;
         }
         if (titlebar.buttonAt(point, l)) |b| {
-            armed_button = b;
+            c.armed = b;
             return true;
         }
-        // With a menu open, a click in the bar closes it rather than
-        // grabbing the window, the same as a click anywhere else would.
-        if (!app.menu.capturing() and titlebar.inDragArea(point, l, app.font)) {
-            const now = pen.getTime();
-            if (now - last_caption_press < multi_click_seconds) {
-                last_caption_press = -1;
-                w.toggleMaximize();
-            } else {
-                last_caption_press = now;
-                w.beginMove();
-            }
-            return true;
-        }
-    }
+        // An open menu takes the click, to close itself.
+        if (app.menu.capturing() or !titlebar.inDragArea(point, l, app.font)) return false;
 
-    if (armed_button) |armed| {
-        if (!pen.isMouseButtonReleased(.left)) return true;
-        armed_button = null;
-        if (titlebar.buttonAt(point, l) == armed) switch (armed) {
-            .minimize => w.minimize(),
-            .maximize => w.toggleMaximize(),
-            .close => w.close_requested = true,
-        };
+        const now = pen.getTime();
+        if (now - c.last_press < multi_click_seconds) {
+            c.last_press = -1;
+            w.toggleMaximize();
+        } else {
+            c.last_press = now;
+            w.beginMove();
+        }
         return true;
     }
-    return false;
-}
 
-fn setCursor(shape: pen.MouseCursor) void {
-    if (shape == cursor_shape) return;
-    cursor_shape = shape;
-    pen.setMouseCursor(shape);
-}
+    fn setCursor(c: *Caption, shape: pen.MouseCursor) void {
+        if (shape == c.cursor) return;
+        c.cursor = shape;
+        pen.setMouseCursor(shape);
+    }
+};
 
 /// Runs the menu bar. Returns true when it has taken this frame's input.
 fn handleMenu() !bool {

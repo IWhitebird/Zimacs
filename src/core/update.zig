@@ -1,14 +1,6 @@
-//! Checking whether a newer Zimacs has been released, and in official builds
-//! installing it.
-//!
-//! This asks GitHub what the latest tag is and compares it with the version
-//! built into this binary. Release builds then hand over to `selfupdate.zig`,
-//! which will only install a binary whose signature checks out. Anything
-//! else, including a build you made yourself, just says a new version exists:
-//! replacing your own `zig build` output with a release would be no help.
-//!
-//! The work runs on its own thread, so a slow network never stalls the
-//! editor. The result is handed back through one atomic state.
+//! Checks GitHub for a newer release on a background thread and, in
+//! official builds, hands it to `selfupdate.zig` to install. Builds made
+//! without `-Dself-update` only report that it exists.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -75,29 +67,23 @@ pub const State = enum(u8) {
     idle,
     checking,
     up_to_date,
-    /// Newer, but this build does not install it; see the file comment.
     available,
     downloading,
-    /// On disk and verified. It runs next time Zimacs starts.
+    /// Verified and in place; runs next start.
     installed,
     failed,
 };
 
-/// What a check should do about a newer release.
 pub const Options = struct {
-    /// Download and install it, rather than only saying it exists.
     install: bool = false,
-    /// Report "up to date" and failures. Off for the check made at startup,
-    /// which should say nothing unless there is something worth saying.
+    /// Report "up to date" and failures too.
     announce: bool = true,
 };
 
 pub const Update = struct {
     state: std.atomic.Value(State) = .init(.idle),
-    /// Only read once `state` has moved past `.checking`, which the worker
-    /// sets after writing it.
+    /// Written by the worker before it publishes `state`.
     latest: Version = .{},
-    /// Set before the worker starts and only read after.
     announce: bool = true,
 
     const Self = @This();
@@ -106,14 +92,10 @@ pub const Update = struct {
         return u.state.load(.acquire);
     }
 
-    /// Starts a check in the background. Does nothing if one is already
-    /// under way, or on the web, which has neither threads nor a way out to
-    /// another origin.
+    /// No-op on the web, or while one is running or installed.
     pub fn start(u: *Self, gpa: std.mem.Allocator, io: std.Io, current: Version, options: Options) void {
         if (builtin.os.tag == .emscripten) return;
         switch (u.state.load(.acquire)) {
-            // Running already, or done: an installed update just waits for a
-            // restart, and checking again would only download it twice.
             .checking, .downloading, .installed => return,
             else => {},
         }
@@ -146,9 +128,7 @@ pub const Update = struct {
 
         u.state.store(.downloading, .release);
         selfupdate.fetchAndInstall(gpa, io, latest) catch {
-            // Could not install it, for whatever reason: a folder it cannot
-            // write to, a signature that did not check out. Say it exists
-            // instead, so it can still be fetched by hand.
+            // Still worth telling the user it exists.
             u.state.store(.available, .release);
             return;
         };

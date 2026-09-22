@@ -1,25 +1,14 @@
-//! Replacing this copy of Zimacs with a newer release, once it is proven
-//! genuine.
-//!
-//! Every release binary is signed by the release workflow with a private key
-//! only it holds, and the matching public key is compiled in below. An update
-//! is installed only if its signature checks out against that key, so a
-//! tampered download or a swapped release asset is refused rather than run. A
-//! checksum could not do this: whoever can change a file can change the
-//! checksum beside it, but cannot forge a signature without the key.
-//!
-//! What gets signed is the binary followed by the version and platform it is
-//! for. That stops a genuine old build being republished as a new one, or one
-//! platform's build being passed to another.
+//! Installs a newer release in place of the running binary, once its
+//! Ed25519 signature checks out against the key compiled in below. The
+//! signed message is the binary plus its version and platform, so an old
+//! build cannot pose as a new one.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const Ed25519 = std.crypto.sign.Ed25519;
 const Version = @import("update.zig").Version;
 
-/// The release workflow's public key. `scripts/sign-update.sh` refuses to
-/// sign with any key but its partner, so a release cannot go out that
-/// installed copies would then turn away.
+/// `scripts/sign-update.sh` refuses to sign with any other key's partner.
 pub const public_key_hex = "868c456d25be5c40a6a0307dc7b53d1e49e17f37d85baafeb2a15a32b63fb570";
 
 const public_key: [32]u8 = blk: {
@@ -30,13 +19,10 @@ const public_key: [32]u8 = blk: {
 
 const release_base = "https://github.com/IWhitebird/Zimacs/releases/download";
 
-/// Real binaries are a few megabytes. This only stops a bad response being
-/// written out as though it were one.
 const max_binary = 64 * 1024 * 1024;
 const max_signature = 1024;
 
-/// This build as the release assets name it, or null where there are no
-/// self-updating builds to fetch.
+/// As release assets name it; null where no builds are published.
 pub const platform: ?[]const u8 = if (builtin.cpu.arch != .x86_64)
     null
 else switch (builtin.os.tag) {
@@ -47,9 +33,7 @@ else switch (builtin.os.tag) {
 
 pub const Error = error{ Unsupported, Unavailable, BadSignature, NoSpace };
 
-/// Downloads `version` for this platform, checks its signature, and puts it
-/// in place of the running binary. The running copy carries on untouched;
-/// the new one starts next time.
+/// The running copy is untouched; the new one starts next time.
 pub fn fetchAndInstall(gpa: std.mem.Allocator, io: std.Io, version: Version) !void {
     const plat = platform orelse return error.Unsupported;
 
@@ -74,8 +58,7 @@ pub fn fetchAndInstall(gpa: std.mem.Allocator, io: std.Io, version: Version) !vo
     try install(io, exe, binary);
 }
 
-/// Deletes the old binary a Windows update stepped aside, now that nothing
-/// is running it. Harmless where there is none.
+/// Deletes the `.old` binary a Windows update left.
 pub fn removeLeftovers(gpa: std.mem.Allocator, io: std.Io) void {
     const exe = std.process.executablePathAlloc(io, gpa) catch return;
     defer gpa.free(exe);
@@ -89,14 +72,12 @@ pub fn removeLeftovers(gpa: std.mem.Allocator, io: std.Io) void {
 
 // ------------------------------------------------------------ the parts
 
-/// The release asset that holds the bare binary for `plat`.
 pub fn assetName(buf: []u8, plat: []const u8) ![]const u8 {
     const ext = if (std.mem.startsWith(u8, plat, "windows")) ".exe" else "";
     return std.fmt.bufPrint(buf, "zimacs-{s}{s}", .{ plat, ext }) catch error.NoSpace;
 }
 
-/// Appended to the binary before signing. `scripts/sign-update.sh` writes
-/// exactly the same bytes, and the two must never drift.
+/// Must match what `scripts/sign-update.sh` appends.
 pub fn signedSuffix(buf: []u8, version: Version, plat: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "\nzimacs-update:{d}.{d}.{d}:{s}", .{
         version.major, version.minor, version.patch, plat,
@@ -111,14 +92,12 @@ pub fn verify(binary: []const u8, signature: []const u8, version: Version, plat:
     var suffix_buf: [128]u8 = undefined;
     const suffix = try signedSuffix(&suffix_buf, version, plat);
 
-    // Streamed, so the binary is not copied just to have the suffix on the end.
     var verifier = sig.verifier(public) catch return error.BadSignature;
     verifier.update(binary);
     verifier.update(suffix);
     verifier.verify() catch return error.BadSignature;
 }
 
-/// Puts `binary` in place of the executable at `exe_path`.
 pub fn install(io: std.Io, exe_path: []const u8, binary: []const u8) !void {
     const dir_path = std.fs.path.dirname(exe_path) orelse return error.Unavailable;
     var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
@@ -126,19 +105,15 @@ pub fn install(io: std.Io, exe_path: []const u8, binary: []const u8) !void {
     try swap(io, dir, std.fs.path.basename(exe_path), binary, if (builtin.os.tag == .windows) .step_aside else .replace);
 }
 
-/// How a running executable can be replaced on this system.
 pub const Strategy = enum {
-    /// Rename the new file over the old. The running process keeps the old
-    /// one open, and the system frees it when that process exits.
+    /// Rename over the old file; the running process keeps its copy.
     replace,
-    /// Windows will neither overwrite nor delete a running executable, but
-    /// it will rename one. So the old binary steps aside to `.old`, the new
-    /// one takes its name, and `removeLeftovers` tidies up next start.
+    /// Windows can rename a running executable but not replace it, so the
+    /// old one moves to `.old` first.
     step_aside,
 };
 
-/// The new binary is written beside the old one first, so the swap is only
-/// renames, and a failure at any point leaves a working binary in place.
+/// Written alongside first, so a failure leaves a working binary.
 pub fn swap(io: std.Io, dir: std.Io.Dir, name: []const u8, binary: []const u8, strategy: Strategy) !void {
     var staged_buf: [256]u8 = undefined;
     const staged = try siblingName(&staged_buf, name, ".update");
@@ -157,7 +132,6 @@ pub fn swap(io: std.Io, dir: std.Io.Dir, name: []const u8, binary: []const u8, s
             dir.deleteFile(io, old) catch {};
             try dir.rename(name, dir, old, io);
             dir.rename(staged, dir, name, io) catch |err| {
-                // Put the old one back rather than leave nothing to start.
                 dir.rename(old, dir, name, io) catch {};
                 return err;
             };
@@ -197,7 +171,6 @@ fn testKeyPair() !Ed25519.KeyPair {
     return Ed25519.KeyPair.generateDeterministic(@splat(7));
 }
 
-/// Signs the way the release workflow does: binary, then suffix.
 fn testSign(kp: Ed25519.KeyPair, binary: []const u8, version: Version, plat: []const u8) ![64]u8 {
     var buf: [128]u8 = undefined;
     const suffix = try signedSuffix(&buf, version, plat);

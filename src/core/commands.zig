@@ -141,15 +141,12 @@ pub fn chooseInBrowser(name: []const u8) !void {
     app.openFile(full) catch |err| report("Could not open", err);
 }
 
-/// Asks GitHub whether there is a newer release, from the Help menu, and
-/// reports whatever it finds. Official builds install it too. Runs in the
-/// background, so the editor carries on while it waits.
+/// From the Help menu. Official builds also install what they find.
 pub fn checkForUpdates() void {
     startUpdate(.{ .install = build_info.self_update, .announce = true });
 }
 
-/// The check made at startup. Silent unless there is news, and does nothing
-/// at all in a build you made yourself or with `auto_update` switched off.
+/// Silent unless there is news. Official builds with `auto_update` only.
 pub fn updateInBackground() void {
     if (!build_info.self_update or !app.config.auto_update) return;
     if (app.io) |io| selfupdate.removeLeftovers(app.gpa, io);

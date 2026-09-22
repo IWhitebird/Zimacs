@@ -543,11 +543,6 @@ fn drawMenu(l: Layout, cell: Metrics) void {
     if (app.menu.showing_about) drawAbout(l, cell);
 }
 
-/// The red Windows 11 uses behind a hovered Close button.
-const close_hover = pen.Color{ .r = 0xC4, .g = 0x2B, .b = 0x1C, .a = 0xFF };
-
-/// The window's title and its buttons, sharing the menu row when Zimacs draws
-/// its own frame.
 fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
     var buf: [256]u8 = undefined;
     const title: [:0]const u8 = if (app.buffer.current()) |v|
@@ -561,9 +556,9 @@ fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
     for (titlebar.buttons) |b| {
         const rect = titlebar.buttonRect(b, l);
         const hovered = pen.checkCollisionPointRec(point, rect);
-        if (hovered) pen.drawRectangleRec(rect, if (b == .close) close_hover else theme.current.tab_active);
+        if (hovered) pen.drawRectangleRec(rect, if (b == .close) theme.current.close_hover else theme.current.tab_active);
         const ink = if (hovered and b == .close)
-            pen.Color.white
+            theme.current.close_hover_text
         else if (hovered)
             theme.current.tab_text_active
         else
@@ -572,8 +567,7 @@ fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
     }
 }
 
-/// Drawn at one small size whatever the button's width, so they read like
-/// the system's own rather than stretching with the bar.
+/// Fixed-size glyphs, centred, so they do not stretch with the button.
 fn drawCaptionGlyph(b: titlebar.Button, rect: pen.Rectangle, ink: pen.Color) void {
     const size = @round(rect.height * 0.3);
     const x = @round(rect.x + (rect.width - size) / 2);
@@ -582,8 +576,7 @@ fn drawCaptionGlyph(b: titlebar.Button, rect: pen.Rectangle, ink: pen.Color) voi
     switch (b) {
         .minimize => pen.drawRectangleRec(.{ .x = x, .y = y + @round(size / 2), .width = size, .height = 1 }, ink),
         .maximize => if (pen.isWindowMaximized()) {
-            // Restore: a second square peeking out from behind the first.
-            // Only the parts of the back one that would show are drawn.
+            // Restore: the visible edges of a second square behind the first.
             const side = @round(size * 0.8);
             const offset = size - side;
             pen.drawRectangleRec(.{ .x = x + offset, .y = y, .width = side, .height = 1 }, ink);
@@ -599,9 +592,7 @@ fn drawCaptionGlyph(b: titlebar.Button, rect: pen.Rectangle, ink: pen.Color) voi
     }
 }
 
-/// A hairline round the edge. Without the system frame a dark window sits on
-/// a dark desktop with nothing to say where it stops. A maximised window
-/// fills the screen, so it has no edge to mark.
+/// Outline for a frameless window; skipped when maximised.
 fn drawFrame(l: Layout) void {
     if (!app.window.custom_frame or pen.isWindowMaximized()) return;
     const bounds = pen.Rectangle{
@@ -700,8 +691,7 @@ fn drawAbout(l: Layout, cell: Metrics) void {
 }
 
 /// A short word on the update check, for the status bar. Null while idle.
-/// The update's state in the status bar. Quiet checks, the one made at
-/// startup, only speak up when there is actually something new.
+/// Quiet checks (the one at startup) show nothing unless there is news.
 fn updateNotice() ?[:0]const u8 {
     const loud = app.update.announce;
     const v = app.update.latest;

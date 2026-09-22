@@ -1,36 +1,25 @@
-//! The window-system calls the custom title bar needs that raylib does not
-//! wrap: handing a move or resize to the system, and asking where the
-//! pointer is on the desktop.
-//!
-//! Each platform does it the way its own title bars do. On Windows the
-//! caption is pressed on our behalf. On X11 the window manager is asked to
-//! take over with _NET_WM_MOVERESIZE, the request GTK and Qt send for their
-//! own client-side title bars, which is also what lets snapping to screen
-//! edges work. Where neither applies these return false or null, and
-//! `window.zig` moves the window by hand instead.
+//! Window-system calls raylib does not wrap: handing a move or resize to
+//! the system, and reading the pointer's desktop position. Windows gets a
+//! caption press, X11 a _NET_WM_MOVERESIZE request. Elsewhere these report
+//! failure and the caller moves the window itself.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const pen = @import("raylib");
 const Edges = @import("titlebar.zig").Edges;
 
-/// Hands a move (no edges) or a resize (some edges) to the system. False
-/// when the system cannot take it, so the caller has to do it.
+/// Hands a move (no edges) or resize to the system. False if it cannot.
 pub fn systemDrag(edges: Edges) bool {
     return switch (builtin.os.tag) {
-        // Windows will move a frameless window but will not resize one, so
-        // resizing is left to the caller there.
+        // Windows will not resize a frameless window.
         .windows => if (edges.any()) false else win32.dragByCaption(),
         .linux => x11.moveResize(edges),
         else => false,
     };
 }
 
-/// Where the pointer is on the desktop, in the same pixels as the window's
-/// own position and size. Asked of the system rather than worked out from
-/// the window's position plus the pointer's place inside it: while the
-/// window is moving, those two update a frame apart, and adding them makes
-/// every frame repeat the last one's move.
+/// Desktop pointer position, in window-system pixels. Asked of the system
+/// because window position plus pointer update a frame apart mid-drag.
 pub fn cursorOnScreen() ?pen.Vector2 {
     return switch (builtin.os.tag) {
         .windows => win32.cursor(),
@@ -51,9 +40,7 @@ const win32 = struct {
     extern "user32" fn PostMessageW(hwnd: ?*anyopaque, msg: u32, wparam: usize, lparam: isize) callconv(.winapi) c_int;
     extern "user32" fn GetCursorPos(point: *POINT) callconv(.winapi) c_int;
 
-    /// Starts Windows' own move loop, which returns once the button is let
-    /// go. That loop swallows the release on the way out, so GLFW would go
-    /// on believing the button is held; posting one back puts that right.
+    /// The move loop swallows the button release; post it back for GLFW.
     fn dragByCaption() bool {
         const hwnd = pen.getWindowHandle();
         _ = ReleaseCapture();
@@ -113,15 +100,14 @@ const x11 = struct {
         same_screen: c_int,
     };
 
-    /// Xlib's XEvent: every kind of event, padded to one fixed size.
+    /// Xlib's XEvent union.
     const Event = extern union {
         client: ClientMessageEvent,
         button: ButtonEvent,
         pad: [24]c_long,
     };
 
-    // GLFW's own connection and window. The press being handed over holds a
-    // grab on GLFW's connection, so a second connection could not let it go.
+    // GLFW's connection, which holds the press's pointer grab.
     extern fn glfwGetCurrentContext() ?*anyopaque;
     extern fn glfwGetX11Display() ?*Display;
     extern fn glfwGetX11Window(window: ?*anyopaque) Window;
@@ -158,8 +144,7 @@ const x11 = struct {
     ) c_int;
     extern "X11" fn XFree(data: ?*anyopaque) c_int;
 
-    /// Whether the window manager understands _NET_WM_MOVERESIZE. Asked once,
-    /// since the answer cannot change while Zimacs runs.
+    /// Whether the window manager lists _NET_WM_MOVERESIZE. Asked once.
     var supported: ?bool = null;
 
     fn cursor() ?pen.Vector2 {
@@ -186,8 +171,6 @@ const x11 = struct {
         const x: c_int = @intFromFloat(at.x);
         const y: c_int = @intFromFloat(at.y);
 
-        // The window manager cannot grab the pointer while the press still
-        // holds it for us.
         _ = XUngrabPointer(d, CurrentTime);
 
         var request = Event{
@@ -199,15 +182,13 @@ const x11 = struct {
                 .window = window,
                 .message_type = XInternAtom(d, "_NET_WM_MOVERESIZE", 0),
                 .format = 32,
-                // Where the pointer is, which way to go, the button held, and 1
-                // for "an ordinary application asked".
+                // Pointer, direction, button, and 1 for an ordinary application.
                 .data = .{ x, y, direction(edges), 1, 1 },
             },
         };
         _ = XSendEvent(d, root, 0, SubstructureRedirectMask | SubstructureNotifyMask, &request);
 
-        // From here the release goes to the window manager, not to us, and
-        // GLFW would think the button was still down, losing the next click.
+        // The window manager now gets the release; send GLFW one too.
         var release = Event{ .button = .{
             .type = ButtonRelease,
             .serial = 0,
@@ -230,8 +211,7 @@ const x11 = struct {
         return true;
     }
 
-    /// The directions _NET_WM_MOVERESIZE numbers, clockwise from top-left,
-    /// with 8 meaning move.
+    /// Clockwise from top-left; 8 is move.
     fn direction(e: Edges) c_long {
         if (e.top and e.left) return 0;
         if (e.top and e.right) return 2;
@@ -250,8 +230,6 @@ const x11 = struct {
         return supported.?;
     }
 
-    /// Reads _NET_SUPPORTED, the list of requests the window manager has
-    /// published that it handles. No window manager, no list.
     fn listsMoveResize(d: *Display) bool {
         const wanted = XInternAtom(d, "_NET_WM_MOVERESIZE", 0);
         var kind: Atom = 0;
@@ -279,8 +257,7 @@ const x11 = struct {
         if (status != Success or kind != XA_ATOM or format != 32) return false;
         const bytes = data orelse return false;
 
-        // Xlib hands back format-32 properties as C longs, whatever the
-        // width of a long.
+        // Format-32 properties come back as C longs.
         const atoms: [*]const c_ulong = @ptrCast(@alignCast(bytes));
         return std.mem.indexOfScalar(c_ulong, atoms[0..count], wanted) != null;
     }
@@ -303,7 +280,6 @@ test "every edge and corner maps to its _NET_WM_MOVERESIZE direction" {
 }
 
 test "Xlib event layouts match the C ABI on this target" {
-    // An XEvent is 24 longs, and the variants must fit inside it.
     try testing.expectEqual(24 * @sizeOf(c_long), @sizeOf(x11.Event));
     if (@sizeOf(c_long) == 8) {
         try testing.expectEqual(@as(usize, 96), @sizeOf(x11.ClientMessageEvent));

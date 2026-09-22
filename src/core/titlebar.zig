@@ -1,13 +1,5 @@
-//! The title bar Zimacs draws for itself when the system frame is switched
-//! off: where the window buttons sit, which part of the bar drags the window,
-//! where the title goes, and which edges of the window resize it.
-//!
-//! It shares its row with the menu bar, the way VS Code does, so the menus
-//! stay on the left, the buttons on the right, and everything between them is
-//! somewhere to grab the window.
-//!
-//! Geometry only, like `menu.zig`. Drawing is in `editor.zig`, the pointer is
-//! handled in `input.zig`, and the real window is moved by `window.zig`.
+//! Geometry of the custom title bar, which shares the menu row: caption
+//! buttons, drag area, title placement and window resize edges.
 
 const std = @import("std");
 const pen = @import("raylib");
@@ -24,7 +16,7 @@ pub const buttons = [_]Button{ .minimize, .maximize, .close };
 /// How close to the edge of the window the pointer has to be to resize it.
 pub const grip: f32 = 5;
 
-/// Wide and flat, in the proportions of a Windows 11 caption button.
+/// Windows 11 caption button proportions.
 pub fn buttonWidth(l: Layout) f32 {
     return @round(l.menu.height * 1.4);
 }
@@ -47,7 +39,7 @@ pub fn buttonAt(point: pen.Vector2, l: Layout) ?Button {
     return null;
 }
 
-/// Everything between the last menu title and the first window button.
+/// Between the last menu title and the first button.
 pub fn dragRect(l: Layout, font: Font) pen.Rectangle {
     const last = menu.titleRect(menu.bar.len - 1, l, font);
     const start = last.x + last.width;
@@ -59,9 +51,8 @@ pub fn inDragArea(point: pen.Vector2, l: Layout, font: Font) bool {
     return pen.checkCollisionPointRec(point, dragRect(l, font));
 }
 
-/// Where a title `text_width` wide goes: centred on the whole window, as
-/// Windows and GNOME centre it, unless that would run into the menus or the
-/// buttons, in which case it slides over. Null when it does not fit at all.
+/// Centred on the window, shifted to clear the menus and buttons, or null
+/// when it does not fit.
 pub fn titleRect(text_width: f32, l: Layout, font: Font) ?pen.Rectangle {
     const room = dragRect(l, font);
     const margin = layout.padding * 2;
@@ -72,8 +63,6 @@ pub fn titleRect(text_width: f32, l: Layout, font: Font) ?pen.Rectangle {
     return .{ .x = x, .y = l.menu.y, .width = text_width, .height = l.menu.height };
 }
 
-/// Which edges of the window a point is close enough to resize. A corner has
-/// two set.
 pub const Edges = struct {
     left: bool = false,
     right: bool = false,
@@ -84,7 +73,6 @@ pub const Edges = struct {
         return e.left or e.right or e.top or e.bottom;
     }
 
-    /// The pointer shape that says which way a drag from here resizes.
     pub fn cursor(e: Edges) pen.MouseCursor {
         if ((e.left and e.top) or (e.right and e.bottom)) return .resize_nwse;
         if ((e.right and e.top) or (e.left and e.bottom)) return .resize_nesw;
@@ -94,9 +82,7 @@ pub const Edges = struct {
     }
 };
 
-/// The window buttons sit in the top-right corner, so the top edge stops
-/// short of them: otherwise the last few pixels above Close would resize the
-/// window instead of closing it.
+/// The top edge stops short of the buttons, so Close is not a resize grip.
 pub fn edgesAt(point: pen.Vector2, l: Layout) Edges {
     const width = l.menu.width;
     const height = l.status.y + l.status.height;
@@ -157,7 +143,6 @@ test "the drag area runs from the last menu to the first button" {
 
     try testing.expectApproxEqAbs(last.x + last.width, drag.x, 0.01);
     try testing.expectApproxEqAbs(buttonRect(.minimize, l).x, drag.x + drag.width, 0.01);
-    // A menu title and a button are not places to grab the window.
     try testing.expect(!inDragArea(.{ .x = 4, .y = 10 }, l, test_font));
     try testing.expect(!inDragArea(.{ .x = 790, .y = 10 }, l, test_font));
     try testing.expect(inDragArea(.{ .x = drag.x + 1, .y = 10 }, l, test_font));

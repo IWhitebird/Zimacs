@@ -19,8 +19,7 @@ const recent_mod = @import("core/recent.zig");
 const session = @import("core/session.zig");
 const web = @import("core/web.zig");
 
-/// The SQLite amalgamation, from a mirror that serves it with CORS headers,
-/// which sqlite.org itself does not.
+/// A large real file for the web demo, from a mirror that sends CORS headers.
 const sqlite_url = "https://cdn.jsdelivr.net/gh/gittiver/sqlite3-amalgamation@master/src/sqlite3/sqlite3.c";
 const welcome_data = @embedFile("welcome_data");
 const update_mod = @import("core/update.zig");
@@ -107,7 +106,14 @@ pub fn run(start: Start) !void {
 
     loadConfig(start);
     theme.apply(config.colors);
-    font.size = config.font_size;
+
+    // Before the window opens, so it opens at the saved size and zoom.
+    const session_dir = try sessionDir(start);
+    defer if (session_dir) |d| gpa.free(d);
+    const last = lastExtras(session_dir);
+    font.base = config.font_size;
+    font.size = std.math.clamp(config.font_size + last.zoom, Font.min_size, Font.max_size);
+    window.restoreTo(last.window);
 
     defer artifacts.deinit(gpa);
     try artifacts.appendSlice(gpa, &.{
@@ -127,17 +133,12 @@ pub fn run(start: Start) !void {
     try font.load();
     defer font.unload();
 
-    const session_dir = try sessionDir(start);
-    defer if (session_dir) |d| gpa.free(d);
-
     const data_dir = try dataDir(start);
     defer if (data_dir) |d| gpa.free(d);
     if (data_dir) |d| if (io) |active_io| recent.load(active_io, d) catch {};
 
     try openStartingBuffers(start, session_dir);
 
-    // Official builds keep themselves current: download, verify, install,
-    // all in the background. Takes effect the next time Zimacs starts.
     commands.updateInBackground();
 
     defer if (data_dir) |d| if (io) |active_io| {
@@ -145,13 +146,11 @@ pub fn run(start: Start) !void {
     };
 
     // Registered last so it runs first, while the buffers still exist.
-    defer if (session_dir) |d| if (io) |active_io| {
-        session.save(&buffer, active_io, gpa, d) catch |err| {
-            std.debug.print("Could not save session: {s}\n", .{@errorName(err)});
-        };
-    };
+    defer if (session_dir) |d| saveSession(d);
+    autosave.markSaved(&buffer, currentExtras());
 
     while (!window.shouldClose()) {
+        if (session_dir) |d| if (autosave.due(pen.getTime(), &buffer, currentExtras())) saveSession(d);
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
 
@@ -160,6 +159,28 @@ pub fn run(start: Start) !void {
         pen.clearBackground(theme.current.background);
         for (artifacts.items) |a| a.render() catch |err| reportFrameError(a.name, err);
     }
+}
+
+var autosave = session.Autosave{};
+
+fn lastExtras(session_dir: ?[]const u8) session.Extras {
+    const d = session_dir orelse return .{};
+    const active_io = io orelse return .{};
+    return session.readExtras(active_io, gpa, d);
+}
+
+fn currentExtras() session.Extras {
+    return .{ .zoom = font.zoom(), .window = window.placement() };
+}
+
+fn saveSession(d: []const u8) void {
+    const active_io = io orelse return;
+    const extras = currentExtras();
+    session.save(&buffer, extras, active_io, gpa, d) catch |err| {
+        std.debug.print("Could not save session: {s}\n", .{@errorName(err)});
+        return;
+    };
+    autosave.markSaved(&buffer, extras);
 }
 
 /// Files named on the command line win; otherwise the last session comes
@@ -185,13 +206,9 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
         if (restored) return;
     };
 
-    // A page has no files and no session, so an empty buffer would leave a
-    // visitor staring at nothing. Give the web build something to poke at.
+    // The web build has no files or session, so it opens a welcome text.
     if (on_web) {
         _ = try buffer.newFilled("welcome.txt", welcome_data);
-        // Fetched from a CDN rather than served by us: it is nine megabytes
-        // of someone else's source and has no business in this repository.
-        // It arrives in the background, so the editor is usable immediately.
         web.fetch(sqlite_url, sqliteArrived);
         return;
     }
@@ -199,11 +216,8 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
     _ = try buffer.newScratch();
 }
 
-/// The demo's second tab: a real 9 MB file, so the piece tree is doing
-/// something more convincing than holding a paragraph of welcome text.
 fn sqliteArrived(bytes: []const u8) void {
-    // Opening a tab selects it, and yanking the view out from under someone
-    // mid-sentence is rude, so put the selection back where it was.
+    // Opening a tab selects it; keep the one being read in front.
     const was_active = buffer.active;
     _ = buffer.newFilled("sqlite3.c", bytes) catch return;
     buffer.active = was_active;

@@ -28,6 +28,8 @@ pub const Colors = struct {
     hint: u24 = 0x6E7284,
     scrollbar: u24 = 0x3A3A42,
     scrollbar_hover: u24 = 0x55555F,
+    close_hover: u24 = 0xC42B1C,
+    close_hover_text: u24 = 0xFFFFFF,
 
     /// Sets the field named `key`, if there is one.
     pub fn apply(c: *Colors, key: []const u8, value: []const u8) !void {
@@ -158,6 +160,8 @@ const default_text =
     \\hint = #6e7284
     \\scrollbar = #3a3a42
     \\scrollbar_hover = #55555f
+    \\close_hover = #c42b1c
+    \\close_hover_text = #ffffff
     \\
 ;
 

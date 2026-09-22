@@ -11,6 +11,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/cursor.zig", .raylib = false },
     .{ .path = "src/core/history.zig", .raylib = false },
     .{ .path = "src/core/buffer.zig", .raylib = false },
+    .{ .path = "src/core/session.zig", .raylib = false },
     .{ .path = "src/core/config.zig", .raylib = false },
     .{ .path = "src/core/prompt.zig", .raylib = false },
     .{ .path = "src/core/recent.zig", .raylib = false },
@@ -44,8 +45,7 @@ pub fn build(b: *std.Build) void {
     // Version comes from build.zig.zon, so there is only one place to bump it.
     const build_info = b.addOptions();
     build_info.addOption([]const u8, "version", zon.version);
-    // Only the release workflow sets this. A build of your own should never
-    // go and replace itself with whatever GitHub last published.
+    // Set only by the release workflow.
     const self_update = b.option(bool, "self-update", "Install signed releases automatically") orelse false;
     build_info.addOption(bool, "self_update", self_update);
 
@@ -82,9 +82,7 @@ pub fn build(b: *std.Build) void {
             }),
             .settings = web_settings: {
                 var settings = rlz.emsdk.emccDefaultSettings(b.allocator, .{ .optimize = optimize });
-                // emcc fixes the heap at 16 MB unless told otherwise, which is
-                // not enough to open a file of any size. The demo loads the
-                // SQLite amalgamation, so the heap has to be able to grow.
+                // The default fixed 16 MB heap cannot hold large files.
                 settings.put("ALLOW_MEMORY_GROWTH", "1") catch @panic("OOM");
                 settings.put("INITIAL_MEMORY", "33554432") catch @panic("OOM");
                 break :web_settings settings;
@@ -103,10 +101,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe = b.addExecutable(.{ .name = "Zimacs", .root_module = exe_module });
-    // A console program gets a terminal opened alongside it when started
-    // from Explorer or the Start Menu, which for an editor is just a black
-    // window full of raylib's log. The GUI subsystem gets no terminal. main
-    // still runs as normal, because libc's startup code calls it either way.
+    // No console window alongside the editor.
     if (target.result.os.tag == .windows) exe.subsystem = .windows;
     b.installArtifact(exe);
 

@@ -24,6 +24,8 @@ pub const Theme = struct {
     hint: pen.Color,
     scrollbar: pen.Color,
     scrollbar_hover: pen.Color,
+    close_hover: pen.Color,
+    close_hover_text: pen.Color,
 };
 
 pub var current: Theme = build(.{});
@@ -50,6 +52,8 @@ fn build(c: Colors) Theme {
         .hint = rgb(c.hint),
         .scrollbar = rgb(c.scrollbar),
         .scrollbar_hover = rgb(c.scrollbar_hover),
+        .close_hover = rgb(c.close_hover),
+        .close_hover_text = rgb(c.close_hover_text),
     };
 }
 

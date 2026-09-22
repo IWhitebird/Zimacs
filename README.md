@@ -25,7 +25,9 @@ interface. No GTK, no Electron, no toolkit to install.
 - **Find** with wrap-around (`Ctrl+F`, `F3`)
 - **File browser** drawn in the editor, so it looks and works the same on every
   platform
-- **Session restore**: unsaved work comes back next time, Notepad++ style
+- **Session restore**: reopens exactly as you left it, Notepad++ style: tabs
+  with unsaved work, cursors, selections, scroll, zoom and window placement.
+  Saved every few seconds too, so a crash or shutdown loses almost nothing
 - **Line wrapping**, optional
 - **UTF-8** throughout, including monochrome emoji
 - **Configurable** colours, font size, caret style, tab width
