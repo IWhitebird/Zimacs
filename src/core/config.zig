@@ -54,6 +54,8 @@ pub const Config = struct {
     show_hidden: bool = false,
     /// Draw our own title bar instead of the operating system's frame.
     custom_titlebar: bool = true,
+    /// Install new releases on startup. Only official builds ever do.
+    auto_update: bool = true,
     colors: Colors = .{},
 
     const Self = @This();
@@ -95,6 +97,8 @@ pub const Config = struct {
             c.show_hidden = try parseBool(value);
         } else if (eq(key, "custom_titlebar")) {
             c.custom_titlebar = try parseBool(value);
+        } else if (eq(key, "auto_update")) {
+            c.auto_update = try parseBool(value);
         } else {
             try c.colors.apply(key, value);
         }
@@ -133,6 +137,10 @@ const default_text =
     \\# Draw Zimacs's own title bar. Set to false for your system's window
     \\# frame instead. Takes effect the next time Zimacs starts.
     \\custom_titlebar = true
+    \\
+    \\# Download and install new releases in the background. They are only
+    \\# installed if signed by the Zimacs release key, and run next start.
+    \\auto_update = true
     \\
     \\background = #181818
     \\text = #dedee6
@@ -200,6 +208,7 @@ test "reads values and ignores comments and blank lines" {
         \\expand_tabs = false
         \\wrap_lines = true
         \\custom_titlebar = false
+        \\auto_update = false
         \\background = #202020
     );
     try testing.expectEqual(@as(f32, 24), c.font_size);
@@ -208,6 +217,7 @@ test "reads values and ignores comments and blank lines" {
     try testing.expectEqual(false, c.expand_tabs);
     try testing.expectEqual(true, c.wrap_lines);
     try testing.expectEqual(false, c.custom_titlebar);
+    try testing.expectEqual(false, c.auto_update);
     try testing.expectEqual(@as(u24, 0x202020), c.colors.background);
 }
 

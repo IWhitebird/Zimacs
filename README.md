@@ -150,15 +150,25 @@ unavailable there; everything else works.
 
 ## Updates
 
-`Help → Check for Updates` asks GitHub for the latest release and tells you
-whether a newer one exists. It reports in the status bar and the About panel,
-and runs in the background so it never stalls the editor.
+Zimacs keeps itself up to date. On startup it asks GitHub for the latest
+release, and if there is a newer one it downloads it in the background, checks
+it, and puts it in place of the running copy. The new version runs the next
+time you start Zimacs; the status bar says so when it is ready. Nothing is
+said at all when you are already current.
 
-It does not download or install anything. Replacing a running program with
-bytes fetched over the network is only safe when those bytes are signed by a
-key the binary already trusts. A checksum published beside the download
-proves nothing, since anyone able to change one can change the other. Until
-Zimacs ships signed releases, it tells you and lets you fetch it yourself.
+An update is only installed if it is signed by the Zimacs release key, which
+lives in the release workflow and nowhere in this repository. The matching
+public key is built into every copy, so a download that has been tampered
+with, or a release asset that has been swapped, is refused rather than run. A
+checksum could not give that guarantee: anyone who can change a file can
+change the checksum published beside it, but not a signature. What is signed
+is the binary together with the version and platform it is for, so an old
+build cannot be passed off as a new one.
+
+Only the official release builds update themselves. A copy you build yourself
+never replaces itself with whatever was last published, and
+`Help → Check for Updates` in one only tells you whether a newer release
+exists. To switch updates off, set `auto_update = false`.
 
 ## Settings
 
@@ -179,6 +189,7 @@ wrap_lines = false
 show_hidden = false
 restore_session = true
 custom_titlebar = true  # false for your system's own window frame
+auto_update = true      # install signed releases in the background
 
 background = #181818
 text = #dedee6

@@ -700,18 +700,22 @@ fn drawAbout(l: Layout, cell: Metrics) void {
 }
 
 /// A short word on the update check, for the status bar. Null while idle.
+/// The update's state in the status bar. Quiet checks, the one made at
+/// startup, only speak up when there is actually something new.
 fn updateNotice() ?[:0]const u8 {
+    const loud = app.update.announce;
+    const v = app.update.latest;
     return switch (app.update.status()) {
         .idle => null,
-        .checking => "checking for updates...",
-        .up_to_date => "up to date",
-        .failed => "update check failed",
-        .available => blk: {
-            const latest = app.update.latest;
-            break :blk std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available", .{
-                latest.major, latest.minor, latest.patch,
-            }) catch "update available";
-        },
+        .checking => if (loud) "checking for updates..." else null,
+        .up_to_date => if (loud) "up to date" else null,
+        .failed => if (loud) "update check failed" else null,
+        .available => std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available", .{ v.major, v.minor, v.patch }) catch
+            "update available",
+        .downloading => std.fmt.bufPrintZ(&notice_buf, "updating to v{d}.{d}.{d}...", .{ v.major, v.minor, v.patch }) catch
+            "updating...",
+        .installed => std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} installed, restart to use it", .{ v.major, v.minor, v.patch }) catch
+            "update installed, restart to use it",
     };
 }
 
@@ -719,17 +723,21 @@ var notice_buf: [64]u8 = undefined;
 var about_update_buf: [128]u8 = undefined;
 
 fn aboutUpdateLine() [:0]const u8 {
+    const v = app.update.latest;
     return switch (app.update.status()) {
         .idle => "Help > Check for Updates",
         .checking => "Checking for updates...",
         .up_to_date => "This is the latest release.",
         .failed => "Could not reach GitHub.",
-        .available => blk: {
-            const latest = app.update.latest;
-            break :blk std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out: {s}", .{
-                latest.major, latest.minor, latest.patch, update_mod.releases_url,
-            }) catch "A newer version is available.";
-        },
+        .available => std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out: {s}", .{
+            v.major, v.minor, v.patch, update_mod.releases_url,
+        }) catch "A newer version is available.",
+        .downloading => std.fmt.bufPrintZ(&about_update_buf, "Downloading v{d}.{d}.{d}...", .{
+            v.major, v.minor, v.patch,
+        }) catch "Downloading the update...",
+        .installed => std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is installed. Restart Zimacs to use it.", .{
+            v.major, v.minor, v.patch,
+        }) catch "Update installed. Restart Zimacs to use it.",
     };
 }
 

@@ -136,6 +136,10 @@ pub fn run(start: Start) !void {
 
     try openStartingBuffers(start, session_dir);
 
+    // Official builds keep themselves current: download, verify, install,
+    // all in the background. Takes effect the next time Zimacs starts.
+    commands.updateInBackground();
+
     defer if (data_dir) |d| if (io) |active_io| {
         recent.save(active_io, d) catch {};
     };

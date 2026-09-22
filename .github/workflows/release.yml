@@ -51,7 +51,8 @@ jobs:
 
         # -Dcpu=baseline: without it a native build targets the runner's own
         # CPU, and the binary dies with SIGILL on anything older.
-      - run: zig build -Dcpu=baseline -Doptimize=ReleaseFast
+        # -Dself-update: only builds from here install new releases themselves.
+      - run: zig build -Dcpu=baseline -Doptimize=ReleaseFast -Dself-update=true
 
         # The v0.1.0 binaries shipped with AVX in them and died with SIGILL on
         # older processors. A baseline x86-64 build has no VEX-encoded
@@ -63,6 +64,14 @@ jobs:
             | awk '{print $2}' | grep -cE '^v[a-z]' || true)
           echo "VEX-encoded instructions: $count"
           test "$count" -eq 0
+
+        # The bare binary, signed, is what installed copies download to
+        # update themselves. The script refuses to sign with a key that does
+        # not match the one compiled into Zimacs.
+      - name: Sign for self-update
+        env:
+          ZIMACS_SIGNING_KEY: ${{ secrets.ZIMACS_SIGNING_KEY }}
+        run: sh scripts/sign-update.sh zig-out/bin/Zimacs zimacs-linux-x86_64 linux-x86_64 "${GITHUB_REF_NAME#v}"
 
       - name: Package
         run: |
@@ -77,7 +86,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-linux
-          path: zimacs-*.tar.gz*
+          path: |
+            zimacs-*.tar.gz*
+            zimacs-linux-x86_64
+            zimacs-linux-x86_64.sig
 
   windows:
     # Cross-compiled: Windows needs nothing from the host.
@@ -90,7 +102,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseFast
+      - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseFast -Dself-update=true
 
       - name: Check the binary is really baseline
         run: |
@@ -98,6 +110,11 @@ jobs:
             | awk '{print $2}' | grep -cE '^v[a-z]' || true)
           echo "VEX-encoded instructions: $count"
           test "$count" -eq 0
+
+      - name: Sign for self-update
+        env:
+          ZIMACS_SIGNING_KEY: ${{ secrets.ZIMACS_SIGNING_KEY }}
+        run: sh scripts/sign-update.sh zig-out/bin/Zimacs.exe zimacs-windows-x86_64.exe windows-x86_64 "${GITHUB_REF_NAME#v}"
 
       - name: Package
         run: |
@@ -112,7 +129,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-windows
-          path: zimacs-*.zip*
+          path: |
+            zimacs-*.zip*
+            zimacs-windows-x86_64.exe
+            zimacs-windows-x86_64.exe.sig
 
   publish:
     name: Publish release
@@ -125,9 +145,16 @@ jobs:
       - name: Collect
         run: |
           mkdir -p release
-          find artifacts -type f \( -name 'zimacs-*.tar.gz*' -o -name 'zimacs-*.zip*' \) \
+          find artifacts -type f \( -name 'zimacs-*.tar.gz*' -o -name 'zimacs-*.zip*' \
+            -o -name 'zimacs-*-x86_64' -o -name 'zimacs-*-x86_64.exe' -o -name 'zimacs-*.sig' \) \
             -exec cp {} release/ \;
           ls -la release
+          # A release without its signed binaries would leave every installed
+          # copy stuck on the version before it.
+          for f in zimacs-linux-x86_64 zimacs-linux-x86_64.sig \
+                   zimacs-windows-x86_64.exe zimacs-windows-x86_64.exe.sig; do
+            test -s "release/$f" || { echo "missing $f"; exit 1; }
+          done
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*

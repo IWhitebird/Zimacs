@@ -11,6 +11,8 @@ const BufferView = buffer_mod.BufferView;
 const Action = @import("menu.zig").Action;
 const browser_mod = @import("browser.zig");
 const update_mod = @import("update.zig");
+const selfupdate = @import("selfupdate.zig");
+const build_info = @import("build_info");
 
 /// The last thing searched for, so the menu and F3 repeat the same thing.
 var query: std.ArrayList(u8) = .empty;
@@ -139,12 +141,25 @@ pub fn chooseInBrowser(name: []const u8) !void {
     app.openFile(full) catch |err| report("Could not open", err);
 }
 
-/// Asks GitHub whether there is a newer release. Runs in the background, so
-/// the editor carries on while it waits.
+/// Asks GitHub whether there is a newer release, from the Help menu, and
+/// reports whatever it finds. Official builds install it too. Runs in the
+/// background, so the editor carries on while it waits.
 pub fn checkForUpdates() void {
+    startUpdate(.{ .install = build_info.self_update, .announce = true });
+}
+
+/// The check made at startup. Silent unless there is news, and does nothing
+/// at all in a build you made yourself or with `auto_update` switched off.
+pub fn updateInBackground() void {
+    if (!build_info.self_update or !app.config.auto_update) return;
+    if (app.io) |io| selfupdate.removeLeftovers(app.gpa, io);
+    startUpdate(.{ .install = true, .announce = false });
+}
+
+fn startUpdate(options: update_mod.Options) void {
     const io = app.io orelse return;
     const current = update_mod.Version.parse(app.version) orelse return;
-    app.update.start(app.gpa, io, current);
+    app.update.start(app.gpa, io, current, options);
 }
 
 pub fn openConfig() !void {

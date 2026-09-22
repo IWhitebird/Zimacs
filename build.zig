@@ -16,6 +16,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/recent.zig", .raylib = false },
     .{ .path = "src/core/browser.zig", .raylib = false },
     .{ .path = "src/core/update.zig", .raylib = false },
+    .{ .path = "src/core/selfupdate.zig", .raylib = false },
     .{ .path = "src/core/menu.zig", .raylib = true },
     .{ .path = "src/core/titlebar.zig", .raylib = true },
     .{ .path = "src/core/native.zig", .raylib = true },
@@ -43,6 +44,10 @@ pub fn build(b: *std.Build) void {
     // Version comes from build.zig.zon, so there is only one place to bump it.
     const build_info = b.addOptions();
     build_info.addOption([]const u8, "version", zon.version);
+    // Only the release workflow sets this. A build of your own should never
+    // go and replace itself with whatever GitHub last published.
+    const self_update = b.option(bool, "self-update", "Install signed releases automatically") orelse false;
+    build_info.addOption(bool, "self_update", self_update);
 
     const exe_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
