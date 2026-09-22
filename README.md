@@ -222,3 +222,9 @@ Zimacs embeds two fonts, both under the
 subset of [Noto Emoji](https://github.com/googlefonts/noto-emoji) for emoji.
 It builds against [raylib](https://github.com/raysan5/raylib) (Zlib) through
 [raylib-zig](https://github.com/raylib-zig/raylib-zig) (MIT).
+
+The website shows the [Zig logo](https://github.com/ziglang/logo) unmodified,
+which the Zig Software Foundation licenses under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The web demo
+serves the [SQLite amalgamation](https://sqlite.org/amalgamation.html), which
+is in the public domain.

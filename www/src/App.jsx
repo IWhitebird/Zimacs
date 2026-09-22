@@ -362,7 +362,7 @@ export default function App() {
           </a>
           <div className="facts">
             <span>
-              <Zig width="15" height="15" /> Written in Zig 0.16
+              <Zig width="20" height="18" /> Written in Zig
             </span>
             <span>
               <Scale width="15" height="15" /> MIT licensed
