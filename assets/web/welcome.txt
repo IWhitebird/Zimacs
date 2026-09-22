@@ -1,0 +1,34 @@
+Zimacs, running in your browser.
+
+This is the editor itself, compiled to WebAssembly. Same piece tree, same
+keybindings, same code as the download. This buffer is an ordinary one, so
+type in it, break it, undo it.
+
+Worth trying
+  Ctrl+F            find, then F3 and Shift+F3 for next and previous
+  Ctrl+G            go to a line number
+  Ctrl+D            duplicate this line
+  Ctrl+Shift+K      delete this line
+  Alt+Up            move a line up, Alt+Down to move it back
+  Ctrl+Backspace    rub out the word before the caret
+  Ctrl+Z            undo, Ctrl+Y or Ctrl+Shift+Z to redo
+  Ctrl+A            select everything, Ctrl+L to select one line
+  Ctrl+Enter        open a line below without splitting this one
+  Ctrl+= and Ctrl+- bigger and smaller text, Ctrl+0 to reset
+  Ctrl+Left         jump a word at a time
+  Menu bar          File, Edit, View and Help are all live
+
+Your browser keeps a few of these for itself. Ctrl+N, Ctrl+T and Ctrl+W open
+and close browser tabs, not editor ones, so use the File menu for those here.
+
+What is turned off
+  Opening and saving files. A page has no filesystem, so those are the only
+  things missing. Everything else is the editor exactly as it ships.
+
+Text handling is the real thing too. Tabs, UTF-8 and wide characters are all
+measured in proper screen columns:
+	this line begins with a tab
+	emoji are double width, in one colour: * + o
+
+The whole editor is about 1.2 MB of WebAssembly. No runtime, no toolkit, no
+framework underneath it.

@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
     const font_file = b.path("assets/font/JetBrainsMono-Medium.ttf");
     const emoji_file = b.path("assets/font/NotoEmoji-Subset.ttf");
     const icon_file = b.path("assets/logo/zimacs-64.png");
+    const welcome_file = b.path("assets/web/welcome.txt");
 
     // Version comes from build.zig.zon, so there is only one place to bump it.
     const build_info = b.addOptions();
@@ -52,6 +53,7 @@ pub fn build(b: *std.Build) void {
     exe_module.addAnonymousImport("font_data", .{ .root_source_file = font_file });
     exe_module.addAnonymousImport("emoji_data", .{ .root_source_file = emoji_file });
     exe_module.addAnonymousImport("icon_data", .{ .root_source_file = icon_file });
+    exe_module.addAnonymousImport("welcome_data", .{ .root_source_file = welcome_file });
     exe_module.addOptions("build_info", build_info);
     exe_module.linkLibrary(raylib_lib);
 
@@ -106,6 +108,7 @@ pub fn build(b: *std.Build) void {
             module.addAnonymousImport("font_data", .{ .root_source_file = font_file });
             module.addAnonymousImport("emoji_data", .{ .root_source_file = emoji_file });
             module.addAnonymousImport("icon_data", .{ .root_source_file = icon_file });
+            module.addAnonymousImport("welcome_data", .{ .root_source_file = welcome_file });
             module.addOptions("build_info", build_info);
             module.linkLibrary(raylib_lib);
         }

@@ -35,7 +35,7 @@ interface. No GTK, no Electron, no toolkit to install.
 ### Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/IWhitebird/Zimacs/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts/install.sh | sh
 ```
 
 Installs to `~/.local`, puts `zimacs` on your PATH and registers a desktop
@@ -45,7 +45,7 @@ entry, so Zimacs shows up in your applications menu. No root needed. Set
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/IWhitebird/Zimacs/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts/install.ps1 | iex
 ```
 
 Installs to `%LOCALAPPDATA%\Programs\Zimacs`, adds it to your PATH and creates

@@ -12,10 +12,21 @@
 <body>
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
 <script>
+  // Tells a page embedding this in an iframe when there is something to look
+  // at. Runtime init means the wasm is live but nothing is drawn yet, so this
+  // waits for two frames rather than reporting ready against a blank canvas.
+  function announceReady() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        try { parent.postMessage({ zimacs: 'ready' }, '*'); } catch (e) {}
+      });
+    });
+  }
   var Module = {
     canvas: document.getElementById('canvas'),
     print: function (text) { console.log(text); },
     printErr: function (text) { console.error(text); },
+    onRuntimeInitialized: announceReady,
   };
 </script>
 {{{ SCRIPT }}}

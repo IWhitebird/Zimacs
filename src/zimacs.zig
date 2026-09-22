@@ -17,6 +17,7 @@ const config_mod = @import("core/config.zig");
 const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
 const session = @import("core/session.zig");
+const welcome_data = @embedFile("welcome_data");
 const update_mod = @import("core/update.zig");
 const theme = @import("core/theme.zig");
 const window_mod = @import("core/window.zig");
@@ -174,6 +175,13 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
         const restored = session.restore(&buffer, active_io, gpa, dir) catch false;
         if (restored) return;
     };
+
+    // A page has no files and no session, so an empty buffer would leave a
+    // visitor staring at nothing. Give the web build something to poke at.
+    if (on_web) {
+        _ = try buffer.newFilled("welcome.txt", welcome_data);
+        return;
+    }
 
     _ = try buffer.newScratch();
 }

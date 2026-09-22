@@ -386,6 +386,14 @@ pub const Buffer = struct {
         return b.add(try PieceTree.init(b.gpa), null, name);
     }
 
+    /// A named buffer that already holds text, with no file behind it. The
+    /// web build has nothing to open, so this is what it greets you with.
+    pub fn newFilled(b: *Self, title: []const u8, contents: []const u8) !*BufferView {
+        const name = try b.gpa.dupe(u8, title);
+        errdefer b.gpa.free(name);
+        return b.add(try PieceTree.initFromBytes(b.gpa, contents), null, name);
+    }
+
     /// Switches to `path` if it is already open, otherwise reads it.
     pub fn openOrSelect(b: *Self, path: []const u8) !void {
         for (b.views.items, 0..) |v, i| {
