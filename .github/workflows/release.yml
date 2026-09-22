@@ -49,7 +49,9 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - run: zig build -Doptimize=ReleaseFast
+        # -Dcpu=baseline: without it a native build targets the runner's own
+        # CPU, and the binary dies with SIGILL on anything older.
+      - run: zig build -Dcpu=baseline -Doptimize=ReleaseFast
 
       - name: Package
         run: |
@@ -76,7 +78,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - run: zig build -Dtarget=x86_64-windows -Doptimize=ReleaseFast
+      - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseFast
 
       - name: Package
         run: |

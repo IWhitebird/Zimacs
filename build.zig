@@ -55,6 +55,12 @@ pub fn build(b: *std.Build) void {
     exe_module.addOptions("build_info", build_info);
     exe_module.linkLibrary(raylib_lib);
 
+    // Gives Zimacs.exe its icon in Explorer and the taskbar. Only Windows
+    // has the concept, so it is skipped everywhere else.
+    if (target.result.os.tag == .windows) {
+        exe_module.addWin32ResourceFile(.{ .file = b.path("assets/logo/zimacs.rc") });
+    }
+
     // The web build links through emcc instead of producing a native binary.
     if (target.result.os.tag == .emscripten) {
         const wasm = b.addLibrary(.{ .name = "Zimacs", .root_module = exe_module });

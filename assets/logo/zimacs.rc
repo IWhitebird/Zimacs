@@ -1,0 +1,4 @@
+// Windows reads the first icon in the file as the application icon, which is
+// what Explorer, the taskbar and Alt-Tab show. The window icon set at runtime
+// by raylib is separate from this one.
+1 ICON "zimacs.ico"
