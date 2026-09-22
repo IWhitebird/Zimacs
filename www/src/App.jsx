@@ -9,11 +9,27 @@ const FEATURES = [
   "One binary. No toolkit to install, no runtime, font included",
 ];
 
-function Header() {
+const BUILD = `git clone ${REPO}
+cd Zimacs
+zig build run`;
+
+/* The halftone sun. Three rings of dots over a solid core, drawn in CSS. */
+function Sun() {
   return (
-    <header>
-      <img src="/Zimacs/logo.png" alt="Zimacs" />
-      <h1>Zimacs</h1>
+    <div className="sun" aria-hidden="true">
+      <i className="b1" />
+      <i className="b2" />
+      <i className="b3" />
+    </div>
+  );
+}
+
+function Hero() {
+  return (
+    <header className="hero">
+      <Sun />
+      <img src="/Zimacs/logo.png" alt="" width="108" height="108" />
+      <h1 className="wordmark">ZIMACS</h1>
       <p className="tagline">
         A small, fast, self-contained text editor written in Zig.
       </p>
@@ -32,9 +48,9 @@ function Header() {
 export default function App() {
   return (
     <div className="page">
-      <Header />
+      <Hero />
 
-      <section>
+      <section className="panel">
         <h2>What it does</h2>
         <ul>
           {FEATURES.map((feature) => (
@@ -45,10 +61,16 @@ export default function App() {
 
       <section>
         <h2>Build it</h2>
-        <pre>
-          <code>{`git clone ${REPO}\ncd Zimacs\nzig build run`}</code>
-        </pre>
-        <p className="tagline">
+        <div className="window">
+          <div className="titlebar">
+            <b />
+            terminal
+          </div>
+          <pre>
+            <code>{BUILD}</code>
+          </pre>
+        </div>
+        <p className="note">
           Needs Zig 0.16. Nothing else — raylib is fetched by the build.
         </p>
       </section>
