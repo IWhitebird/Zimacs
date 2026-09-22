@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Linux, Windows, Web, Laptop, GitHub, Zig, Scale } from "./Icons.jsx";
 
 const REPO = "https://github.com/IWhitebird/Zimacs";
-const RAW = "https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts";
+const RAW =
+  "https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts";
 const DEMO = "/demo/Zimacs.html";
 
 const INSTALL = {
@@ -44,7 +45,7 @@ const PLATFORMS = [
 const FEATURES = [
   {
     title: "Piece tree",
-    body: "The storage design VS Code uses. Edits stay fast in large files instead of copying the whole buffer around. Try the 262,899 line tab above.",
+    body: "The storage design VS Code uses. Edits stay fast in large files instead of copying the whole buffer around. Try the 269,649 line tab above.",
   },
   {
     title: "Session restore",
@@ -177,9 +178,7 @@ function Poster() {
             {"    "}self.cursor.offset = at + text.len;
             <span className="caret" />
           </div>
-          <div>
-            {"    "}self.history.record(.insert, at);
-          </div>
+          <div>{"    "}self.history.record(.insert, at);</div>
           <div>{"}"}</div>
         </div>
       </div>
@@ -227,7 +226,7 @@ function Demo() {
         This is the editor itself, compiled to WebAssembly and running in your
         browser. Same piece tree, same keybindings, same code as the download.
         Click into it and type. The second tab holds the SQLite amalgamation,
-        9.3 MB and 262,899 lines of C, so you can see what the piece tree does
+        9.5 MB and 269,649 lines of C, so you can see what the piece tree does
         with a file that size. Opening and saving your own files are the only
         things turned off, because a page has no filesystem.
       </p>
@@ -268,9 +267,9 @@ function Demo() {
       <p className="fineprint">
         Click inside it first so it takes the keyboard. Then <kbd>Ctrl</kbd>+
         <kbd>F</kbd> to find, <kbd>Ctrl</kbd>+<kbd>D</kbd> to duplicate a line,{" "}
-        <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo. Your browser keeps{" "}
-        <kbd>Ctrl</kbd>+<kbd>W</kbd> and <kbd>Ctrl</kbd>+<kbd>T</kbd> for
-        itself, so use the File menu for tabs.
+        <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo. Your browser keeps <kbd>Ctrl</kbd>
+        +<kbd>W</kbd> and <kbd>Ctrl</kbd>+<kbd>T</kbd> for itself, so use the
+        File menu for tabs.
       </p>
     </section>
   );
@@ -306,18 +305,20 @@ export default function App() {
   return (
     <>
       <nav className="nav">
-        <a className="nav-brand" href="#top">
-          <img src="/logo.png" alt="" width="22" height="22" />
-          Zimacs
-        </a>
-        <div className="nav-links">
-          <a href="#try">Try it</a>
-          <a href="#features">Features</a>
-          <a href="#platforms">Platforms</a>
-          <a className="nav-gh" href={REPO}>
-            <GitHub width="15" height="15" />
-            GitHub
+        <div className="wrap nav-inner">
+          <a className="nav-brand" href="#top">
+            <img src="/logo.png" alt="" width="22" height="22" />
+            Zimacs
           </a>
+          <div className="nav-links">
+            <a href="#try">Try it</a>
+            <a href="#features">Features</a>
+            <a href="#platforms">Platforms</a>
+            <a className="nav-gh" href={REPO}>
+              <GitHub width="15" height="15" />
+              GitHub
+            </a>
+          </div>
         </div>
       </nav>
 
@@ -372,7 +373,6 @@ export default function App() {
             </span>
           </div>
         </section>
-
       </main>
 
       <footer className="wrap">
