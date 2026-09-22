@@ -17,6 +17,7 @@ const config_mod = @import("core/config.zig");
 const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
 const session = @import("core/session.zig");
+const update_mod = @import("core/update.zig");
 const theme = @import("core/theme.zig");
 const window_mod = @import("core/window.zig");
 
@@ -29,6 +30,7 @@ pub const Menu = @import("core/menu.zig").Menu;
 pub const Prompt = @import("core/prompt.zig").Prompt;
 pub const Recent = recent_mod.Recent;
 pub const Browser = @import("core/browser.zig").Browser;
+pub const Update = update_mod.Update;
 pub const Window = @import("core/window.zig").Window;
 
 const leak_checks = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
@@ -72,6 +74,7 @@ pub var prompt = Prompt{};
 pub var recent = Recent{};
 pub var menu = Menu{};
 pub var browser = Browser{};
+pub var update = Update{};
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;

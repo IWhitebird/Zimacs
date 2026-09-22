@@ -12,6 +12,7 @@ const layout = @import("layout.zig");
 const text = @import("text.zig");
 const menu = @import("menu.zig");
 const wrap = @import("wrap.zig");
+const update_mod = @import("update.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const BufferView = @import("buffer.zig").BufferView;
 const Metrics = @import("font.zig").Metrics;
@@ -415,6 +416,15 @@ pub const Editor = struct {
 
         const right_x = layout.rightAlign(l.status, app.font.widthOf(label));
 
+        if (updateNotice()) |notice| {
+            app.font.draw(
+                notice,
+                right_x - app.font.widthOf(notice) - layout.padding * 2,
+                y,
+                if (app.update.status() == .available) theme.current.caret else theme.current.hint,
+            );
+        }
+
         e.status.clearRetainingCapacity();
         try e.status.print(app.gpa, "{s}{s}", .{
             view.path orelse view.name,
@@ -582,6 +592,8 @@ fn drawAbout(l: Layout, cell: Metrics) void {
     add(&lines, &count, "", .{});
     add(&lines, &count, "Settings: {s}", .{app.config_path orelse "(none)"});
     add(&lines, &count, "", .{});
+    add(&lines, &count, "{s}", .{aboutUpdateLine()});
+    add(&lines, &count, "", .{});
     add(&lines, &count, "Click anywhere to close.", .{});
 
     var widest: f32 = 0;
@@ -611,6 +623,40 @@ fn drawAbout(l: Layout, cell: Metrics) void {
             if (i == 0) theme.current.tab_text_active else theme.current.status_text,
         );
     }
+}
+
+/// A short word on the update check, for the status bar. Null while idle.
+fn updateNotice() ?[:0]const u8 {
+    return switch (app.update.status()) {
+        .idle => null,
+        .checking => "checking for updates...",
+        .up_to_date => "up to date",
+        .failed => "update check failed",
+        .available => blk: {
+            const latest = app.update.latest;
+            break :blk std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available", .{
+                latest.major, latest.minor, latest.patch,
+            }) catch "update available";
+        },
+    };
+}
+
+var notice_buf: [64]u8 = undefined;
+var about_update_buf: [128]u8 = undefined;
+
+fn aboutUpdateLine() [:0]const u8 {
+    return switch (app.update.status()) {
+        .idle => "Help > Check for Updates",
+        .checking => "Checking for updates...",
+        .up_to_date => "This is the latest release.",
+        .failed => "Could not reach GitHub.",
+        .available => blk: {
+            const latest = app.update.latest;
+            break :blk std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out: {s}", .{
+                latest.major, latest.minor, latest.patch, update_mod.releases_url,
+            }) catch "A newer version is available.";
+        },
+    };
 }
 
 /// How many suggestions the prompt shows at once.

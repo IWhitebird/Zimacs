@@ -864,8 +864,18 @@ test "saveAs renames the buffer and survives the caller reusing its path buffer"
     const gpa = testing.allocator;
     var threaded: std.Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
+    const io = threaded.io();
 
-    var b = Buffer{ .gpa = gpa, .io = threaded.io() };
+    // A directory of its own, so the test does not depend on anything already
+    // existing in the tree.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const dir = dir_buf[0..try tmp.dir.realPath(io, &dir_buf)];
+    const path = try std.fs.path.join(gpa, &.{ dir, "saved.txt" });
+    defer gpa.free(path);
+
+    var b = Buffer{ .gpa = gpa, .io = io };
     defer Buffer.deinit(@ptrCast(&b)) catch {};
 
     const view = try b.newScratch();
@@ -875,14 +885,12 @@ test "saveAs renames the buffer and survives the caller reusing its path buffer"
     // saveAs must not keep borrowing it.
     var typed: std.ArrayList(u8) = .empty;
     defer typed.deinit(gpa);
-    try typed.appendSlice(gpa, "zig-out/saveas-test.txt");
+    try typed.appendSlice(gpa, path);
 
     try b.saveAs(view, typed.items);
-
-    // Scribble over the caller's buffer the way a cleared prompt would.
     @memset(typed.items, 0xAA);
 
-    try testing.expectEqualSlices(u8, "saveas-test.txt", view.name);
-    try testing.expectEqualSlices(u8, "zig-out/saveas-test.txt", view.path.?);
+    try testing.expectEqualSlices(u8, "saved.txt", view.name);
+    try testing.expectEqualSlices(u8, path, view.path.?);
     try testing.expect(!view.edited());
 }

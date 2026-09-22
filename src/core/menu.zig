@@ -41,6 +41,7 @@ pub const Action = enum {
     zoom_reset,
 
     open_config,
+    check_updates,
     about,
 };
 
@@ -89,6 +90,7 @@ pub const bar = [_]Group{
     } },
     .{ .title = "Help", .entries = &.{
         .{ .label = "Edit Settings", .shortcut = "Ctrl+,", .action = .open_config },
+        .{ .label = "Check for Updates", .action = .check_updates },
         .{ .label = "About Zimacs", .action = .about },
     } },
 };

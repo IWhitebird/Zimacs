@@ -10,6 +10,7 @@ const buffer_mod = @import("buffer.zig");
 const BufferView = buffer_mod.BufferView;
 const Action = @import("menu.zig").Action;
 const browser_mod = @import("browser.zig");
+const update_mod = @import("update.zig");
 
 /// The last thing searched for, so the menu and F3 repeat the same thing.
 var query: std.ArrayList(u8) = .empty;
@@ -25,6 +26,7 @@ pub fn run(action: Action) !void {
         .open_recent => try app.prompt.beginWith(.open, app.recent.items()),
         .close_tab => try app.buffer.close(app.buffer.active),
         .open_config => try openConfig(),
+        .check_updates => checkForUpdates(),
         .about => {},
 
         .save => try save(),
@@ -135,6 +137,14 @@ pub fn chooseInBrowser(name: []const u8) !void {
     }
     app.prompt.cancel();
     app.openFile(full) catch |err| report("Could not open", err);
+}
+
+/// Asks GitHub whether there is a newer release. Runs in the background, so
+/// the editor carries on while it waits.
+pub fn checkForUpdates() void {
+    const io = app.io orelse return;
+    const current = update_mod.Version.parse(app.version) orelse return;
+    app.update.start(app.gpa, io, current);
 }
 
 pub fn openConfig() !void {

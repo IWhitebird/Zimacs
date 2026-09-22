@@ -15,6 +15,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/prompt.zig", .raylib = false },
     .{ .path = "src/core/recent.zig", .raylib = false },
     .{ .path = "src/core/browser.zig", .raylib = false },
+    .{ .path = "src/core/update.zig", .raylib = false },
     .{ .path = "src/core/menu.zig", .raylib = true },
     .{ .path = "src/core/theme.zig", .raylib = true },
     .{ .path = "src/core/layout.zig", .raylib = true },
