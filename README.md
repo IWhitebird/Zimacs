@@ -12,11 +12,11 @@ A text editor written in Zig, drawn with raylib.
 
 Zimacs is a small, fast, self-contained text editor. The font is baked into the
 binary, the settings are one plain text file, and the whole thing draws its own
-interface — no GTK, no Electron, no toolkit to install.
+interface. No GTK, no Electron, no toolkit to install.
 
 ## Features
 
-- **Piece-tree text storage** — the same design VS Code uses, so edits stay
+- **Piece-tree text storage**, the same design VS Code uses, so edits stay
   fast in large files
 - **Tabs**, with close buttons and an unsaved marker
 - **Undo and redo**, coalescing runs of typing so one undo removes a word
@@ -25,14 +25,49 @@ interface — no GTK, no Electron, no toolkit to install.
 - **Find** with wrap-around (`Ctrl+F`, `F3`)
 - **File browser** drawn in the editor, so it looks and works the same on every
   platform
-- **Session restore** — unsaved work comes back next time, Notepad++ style
+- **Session restore**: unsaved work comes back next time, Notepad++ style
 - **Line wrapping**, optional
 - **UTF-8** throughout, including monochrome emoji
 - **Configurable** colours, font size, caret style, tab width
 
+## Installing
+
+### Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/IWhitebird/Zimacs/master/install.sh | sh
+```
+
+Installs to `~/.local`, puts `zimacs` on your PATH and registers a desktop
+entry, so Zimacs shows up in your applications menu. No root needed. Set
+`PREFIX` to install somewhere else.
+
+### Windows
+
+```powershell
+irm https://raw.githubusercontent.com/IWhitebird/Zimacs/master/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\Programs\Zimacs`, adds it to your PATH and creates
+a Start Menu shortcut.
+
+Both scripts check the download against the checksum published beside it. That
+catches a corrupted download; it is not a signature and does not prove who
+built the binary. If you would rather do it yourself, the
+[releases page](https://github.com/IWhitebird/Zimacs/releases/latest) has the
+archives.
+
+### Uninstalling
+
+```sh
+rm -rf ~/.local/share/zimacs ~/.local/bin/zimacs \
+  ~/.local/share/applications/zimacs.desktop \
+  ~/.local/share/icons/hicolor/256x256/apps/zimacs.png
+```
+
 ## Building
 
-Needs [Zig 0.16.0](https://ziglang.org/download/). Nothing else — raylib is
+Needs [Zig 0.16.0](https://ziglang.org/download/) and nothing else. raylib is
 fetched and built by the build script.
 
 ```sh
@@ -50,8 +85,8 @@ zig build -Dtarget=aarch64-macos             # macOS (needs the Apple SDK)
 zig build -Dtarget=wasm32-emscripten run     # web: build, serve, open
 ```
 
-The web build lands in `zig-out/web`. It has to be served over HTTP — a
-browser will not load wasm from a `file://` URL — so `run` starts a server for
+The web build lands in `zig-out/web`. It has to be served over HTTP, because a
+browser will not load wasm from a `file://` URL, so `run` starts a server for
 you. Any static server works:
 
 ```sh
@@ -121,7 +156,7 @@ and runs in the background so it never stalls the editor.
 
 It does not download or install anything. Replacing a running program with
 bytes fetched over the network is only safe when those bytes are signed by a
-key the binary already trusts — a checksum published beside the download
+key the binary already trusts. A checksum published beside the download
 proves nothing, since anyone able to change one can change the other. Until
 Zimacs ships signed releases, it tells you and lets you fetch it yourself.
 
@@ -171,7 +206,7 @@ src/core/commands.zig    every action, shared by the menu and the keyboard
 Text lives in immutable buffers that are never edited: an edit only changes
 which slices of them are visible and in what order. Those slices sit in a
 red-black tree that caches, per node, the bytes and newlines in its left
-subtree — which is what makes finding a line O(log n) rather than a scan.
+subtree, which is what makes finding a line O(log n) rather than a scan.
 
 Tests sit at the bottom of the file they test. The piece tree is checked
 against a deliberately naive reference implementation with randomised
@@ -179,7 +214,7 @@ differential testing.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
 
 Zimacs embeds two fonts, both under the
 [SIL Open Font License 1.1](https://openfontlicense.org), which permits this:
