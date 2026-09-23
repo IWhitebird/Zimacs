@@ -88,7 +88,7 @@ pub const Window = struct {
             w.height = pen.getRenderHeight();
         }
         w.trackNormal();
-        try app.font.setDensity(pen.getWindowScaleDPI().x);
+        try app.font.setDensity(density());
         openDroppedFiles();
     }
 
@@ -254,6 +254,13 @@ fn onSomeMonitor(p: Placement) bool {
     return false;
 }
 
+/// How much raylib scales drawing up to reach physical pixels. On the web it
+/// does not scale at all, since `fitToCanvas` already sizes the buffer in
+/// physical pixels, even though raylib still reports the page's pixel ratio.
+pub fn density() f32 {
+    return if (app.on_web) 1 else pen.getWindowScaleDPI().x;
+}
+
 fn renderSize() pen.Vector2 {
     return .{
         .x = @floatFromInt(pen.getRenderWidth()),
@@ -275,9 +282,9 @@ pub fn fitToCanvas() void {
     var css_height: f64 = 0;
     if (emscripten_get_element_css_size("#canvas", &css_width, &css_height) != 0) return;
 
-    const density = emscripten_get_device_pixel_ratio();
-    const want_width: i32 = @intFromFloat(@round(css_width * density));
-    const want_height: i32 = @intFromFloat(@round(css_height * density));
+    const ratio = emscripten_get_device_pixel_ratio();
+    const want_width: i32 = @intFromFloat(@round(css_width * ratio));
+    const want_height: i32 = @intFromFloat(@round(css_height * ratio));
     if (want_width <= 0 or want_height <= 0) return;
 
     if (want_width != pen.getRenderWidth() or want_height != pen.getRenderHeight()) {

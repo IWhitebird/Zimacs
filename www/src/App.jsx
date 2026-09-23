@@ -263,8 +263,6 @@ export default function App() {
             Zimacs
           </a>
           <div className="nav-links">
-            <a href="#try">Try it</a>
-            <a href="#platforms">Platforms</a>
             <a className="nav-gh" href={REPO}>
               <GitHub width="15" height="15" />
               GitHub

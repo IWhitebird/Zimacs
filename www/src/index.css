@@ -761,10 +761,6 @@ kbd {
     font-size: 12px;
   }
 
-  .nav-links a[href="#platforms"] {
-    display: none;
-  }
-
   .source {
     flex-wrap: wrap;
   }

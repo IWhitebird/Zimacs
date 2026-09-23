@@ -137,7 +137,7 @@ pub fn run(start: Start) !void {
 
     // After the window exists, because the glyph atlas is a GPU texture, and
     // released before the window closes for the same reason.
-    font.density = pen.getWindowScaleDPI().x;
+    font.density = window_mod.density();
     try font.load();
     defer font.unload();
 
