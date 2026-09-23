@@ -17,55 +17,24 @@ const PLATFORMS = [
     name: "Linux",
     arch: "x86_64",
     state: "ready",
-    note: "One line to install. Lands in your applications menu.",
   },
   {
     icon: Windows,
     name: "Windows",
     arch: "x86_64",
     state: "ready",
-    note: "One line to install. Start Menu shortcut and on your PATH.",
   },
   {
     icon: Web,
     name: "Browser",
     arch: "wasm",
     state: "ready",
-    note: "The whole editor compiled to WebAssembly. Try it above.",
   },
   {
     icon: Laptop,
     name: "macOS",
     arch: "arm64",
     state: "soon",
-    note: "Compiles and links, but needs the Apple SDK to finish. No build yet.",
-  },
-];
-
-const FEATURES = [
-  {
-    title: "Piece tree",
-    body: "The storage design VS Code uses. Edits stay fast in large files instead of copying the whole buffer around. Try the 269,649 line tab above.",
-  },
-  {
-    title: "Session restore",
-    body: "Unsaved work comes back next time you open it, Notepad++ style. Closing the window loses nothing.",
-  },
-  {
-    title: "Real editing",
-    body: "Tabs, undo and redo, selection by keyboard and mouse, find, go to line, and a file browser drawn in the editor.",
-  },
-  {
-    title: "One binary",
-    body: "No toolkit, no runtime, no config required. The font is baked into the executable.",
-  },
-  {
-    title: "Text done properly",
-    body: "UTF-8 throughout, tabs and wide characters measured in real columns, optional line wrapping.",
-  },
-  {
-    title: "Yours to set up",
-    body: "Colours, font size, caret style and tab width all come from a plain text file you can open from the menu.",
   },
 ];
 
@@ -118,9 +87,7 @@ function Install() {
         <code>{INSTALL[os]}</code>
       </pre>
       <p className="fineprint">
-        Installs under your home directory and adds Zimacs to your{" "}
-        {os === "Linux" ? "applications menu" : "Start Menu"}. No root needed.{" "}
-        <a href={`${REPO}/releases/latest`}>Prefer a direct download?</a>
+        No admin rights needed. <a href={`${REPO}/releases/latest`}>Or download it.</a>
       </p>
     </div>
   );
@@ -221,15 +188,7 @@ function Demo() {
 
   return (
     <section className="demo" id="try">
-      <h2>Try it here</h2>
-      <p className="lede">
-        This is the editor itself, compiled to WebAssembly and running in your
-        browser. Same piece tree, same keybindings, same code as the download.
-        Click into it and type. The second tab holds the SQLite amalgamation,
-        9.5 MB and 269,649 lines of C, so you can see what the piece tree does
-        with a file that size. Opening and saving your own files are the only
-        things turned off, because a page has no filesystem.
-      </p>
+      <h2>Try it</h2>
 
       <div className="stage">
         {missing ? (
@@ -264,13 +223,7 @@ function Demo() {
         )}
       </div>
 
-      <p className="fineprint">
-        Click inside it first so it takes the keyboard. Then <kbd>Ctrl</kbd>+
-        <kbd>F</kbd> to find, <kbd>Ctrl</kbd>+<kbd>D</kbd> to duplicate a line,{" "}
-        <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo. Your browser keeps <kbd>Ctrl</kbd>
-        +<kbd>W</kbd> and <kbd>Ctrl</kbd>+<kbd>T</kbd> for itself, so use the
-        File menu for tabs.
-      </p>
+      <p className="fineprint">Click inside to type.</p>
     </section>
   );
 }
@@ -289,7 +242,6 @@ function Platforms() {
                 <h3>{p.name}</h3>
                 <span className="arch">{p.arch}</span>
               </div>
-              <p>{p.note}</p>
               <span className="badge">
                 {p.state === "ready" ? "available" : "not yet"}
               </span>
@@ -312,7 +264,6 @@ export default function App() {
           </a>
           <div className="nav-links">
             <a href="#try">Try it</a>
-            <a href="#features">Features</a>
             <a href="#platforms">Platforms</a>
             <a className="nav-gh" href={REPO}>
               <GitHub width="15" height="15" />
@@ -327,30 +278,16 @@ export default function App() {
         <div className="wrap">
           <img className="mark" src="/logo.png" alt="" width="96" height="96" />
           <h1 className="wordmark">ZIMACS</h1>
-          <p className="tagline">
-            A small, fast, self-contained text editor written in Zig.
-          </p>
+          <p className="tagline">A small, fast text editor.</p>
           <Install />
           <a className="jump" href="#try">
-            or try it in your browser, no install
+            or try it in your browser
           </a>
         </div>
       </header>
 
       <main className="wrap">
         <Demo />
-
-        <section id="features">
-          <h2>What it does</h2>
-          <div className="grid">
-            {FEATURES.map((f) => (
-              <article className="card" key={f.title}>
-                <h3>{f.title}</h3>
-                <p>{f.body}</p>
-              </article>
-            ))}
-          </div>
-        </section>
 
         <Platforms />
 
@@ -368,15 +305,12 @@ export default function App() {
             <span>
               <Scale width="15" height="15" /> MIT licensed
             </span>
-            <span>
-              <GitHub width="15" height="15" /> Issues and pull requests welcome
-            </span>
           </div>
         </section>
       </main>
 
       <footer className="wrap">
-        <span>A text editor written in Zig.</span>
+        <span>Zimacs</span>
         <a href={REPO}>github.com/IWhitebird/Zimacs</a>
       </footer>
     </>
