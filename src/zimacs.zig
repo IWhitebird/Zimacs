@@ -13,6 +13,7 @@ const pen = @import("raylib");
 
 const build_info = @import("build_info");
 const commands = @import("core/commands.zig");
+const idle = @import("core/idle.zig");
 const config_mod = @import("core/config.zig");
 const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
@@ -152,6 +153,9 @@ pub fn run(start: Start) !void {
 
     commands.updateInBackground();
 
+    if (io) |active_io| idle.start(active_io);
+    defer idle.stop();
+
     defer if (data_dir) |d| if (io) |active_io| {
         recent.save(active_io, d) catch {};
     };
@@ -170,6 +174,7 @@ pub fn run(start: Start) !void {
         defer pen.endDrawing();
         pen.clearBackground(theme.current.background);
         for (artifacts.items) |a| a.render() catch |err| reportFrameError(a.name, err);
+        idle.pace();
     }
 }
 

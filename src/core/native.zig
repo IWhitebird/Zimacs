@@ -18,6 +18,12 @@ pub fn systemDrag(edges: Edges) bool {
     };
 }
 
+/// Asks for rounded window corners. Only Windows 11 draws them for a
+/// frameless window; elsewhere the corners stay square.
+pub fn roundCorners() void {
+    if (builtin.os.tag == .windows) win32.roundCorners();
+}
+
 /// Desktop pointer position, in window-system pixels. Asked of the system
 /// because window position plus pointer update a frame apart mid-drag.
 pub fn cursorOnScreen() ?pen.Vector2 {
@@ -32,6 +38,8 @@ const win32 = struct {
     const WM_NCLBUTTONDOWN: u32 = 0x00A1;
     const WM_LBUTTONUP: u32 = 0x0202;
     const HTCAPTION: usize = 2;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: u32 = 2;
 
     const POINT = extern struct { x: c_long, y: c_long };
 
@@ -39,6 +47,13 @@ const win32 = struct {
     extern "user32" fn SendMessageW(hwnd: ?*anyopaque, msg: u32, wparam: usize, lparam: isize) callconv(.winapi) isize;
     extern "user32" fn PostMessageW(hwnd: ?*anyopaque, msg: u32, wparam: usize, lparam: isize) callconv(.winapi) c_int;
     extern "user32" fn GetCursorPos(point: *POINT) callconv(.winapi) c_int;
+    extern "dwmapi" fn DwmSetWindowAttribute(hwnd: ?*anyopaque, attribute: u32, value: *const anyopaque, size: u32) callconv(.winapi) c_long;
+
+    /// Fails harmlessly before Windows 11, which does not know the attribute.
+    fn roundCorners() void {
+        const preference = DWMWCP_ROUND;
+        _ = DwmSetWindowAttribute(pen.getWindowHandle(), DWMWA_WINDOW_CORNER_PREFERENCE, &preference, @sizeOf(u32));
+    }
 
     /// The move loop swallows the button release; post it back for GLFW.
     fn dragByCaption() bool {

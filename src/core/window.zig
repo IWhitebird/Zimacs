@@ -69,6 +69,7 @@ pub const Window = struct {
         // raylib closes on Escape by default.
         pen.setExitKey(.null);
         setIcon();
+        if (w.custom_frame) native.roundCorners();
 
         if (w.restore_to) |p| w.putBack(p);
         if (hidden) pen.clearWindowState(.{ .window_hidden = true });
@@ -205,15 +206,27 @@ const Drag = struct {
         width = @max(width, min_width * scale.x);
         height = @max(height, min_height * scale.y);
 
+        if (round(width) == pen.getRenderWidth() and round(height) == pen.getRenderHeight()) return;
+
         // Left and top edges move the window so the opposite edge stays put.
         if (d.edges.left or d.edges.top) {
             const x = if (d.edges.left) d.position.x + d.size.x - width else d.position.x;
             const y = if (d.edges.top) d.position.y + d.size.y - height else d.position.y;
             pen.setWindowPosition(round(x), round(y));
         }
-        pen.setWindowSize(round(width), round(height));
+        setPhysicalSize(round(width), round(height));
     }
 };
+
+extern fn glfwGetCurrentContext() ?*anyopaque;
+extern fn glfwSetWindowSize(window: ?*anyopaque, width: c_int, height: c_int) void;
+
+/// Past raylib, whose `setWindowSize` records the size as logical and only
+/// corrects it once the framebuffer changes. When it does not, as for a
+/// size the system refuses, the layout stays drawn too large for the window.
+fn setPhysicalSize(width: i32, height: i32) void {
+    glfwSetWindowSize(glfwGetCurrentContext(), width, height);
+}
 
 /// Restores a maximised window with the pointer at the same fraction across.
 fn restoreUnderCursor() void {
