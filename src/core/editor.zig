@@ -865,38 +865,49 @@ fn drawAbout(l: Layout, cell: Metrics) void {
     var lines: [about_capacity][:0]const u8 = undefined;
     var count: usize = 0;
 
+    const window_width = l.menu.width;
+    const window_bottom = l.status.y + l.status.height;
+    const inner = layout.padding * 4;
+    const columns: u32 = @intFromFloat(@max((window_width - layout.padding * 2 - inner) / cell.width, 8));
+
     const add = struct {
-        fn go(out: *[about_capacity][:0]const u8, n: *usize, comptime fmt: []const u8, args: anytype) void {
+        fn go(out: *[about_capacity][:0]const u8, n: *usize, fit: u32, comptime fmt: []const u8, args: anytype) void {
             if (n.* == out.len) return;
-            out[n.*] = std.fmt.bufPrintZ(&about_storage[n.*], fmt, args) catch "";
+            var raw: [about_storage[0].len]u8 = undefined;
+            const line = std.fmt.bufPrint(&raw, fmt, args) catch "";
+            out[n.*] = text.fitStart(&about_storage[n.*], line, fit);
             n.* += 1;
         }
     }.go;
 
-    add(&lines, &count, "Zimacs {s}", .{app.version});
-    add(&lines, &count, "", .{});
-    add(&lines, &count, "A text editor written in Zig.", .{});
-    add(&lines, &count, "Zig {f} on {s}-{s}", .{
+    add(&lines, &count, columns, "Zimacs {s}", .{app.version});
+    add(&lines, &count, columns, "", .{});
+    add(&lines, &count, columns, "A text editor written in Zig.", .{});
+    add(&lines, &count, columns, "Zig {f} on {s}-{s}", .{
         builtin.zig_version,
         @tagName(builtin.cpu.arch),
         @tagName(builtin.os.tag),
     });
-    add(&lines, &count, "", .{});
-    add(&lines, &count, "Settings: {s}", .{app.config_path orelse "(none)"});
-    add(&lines, &count, "", .{});
-    add(&lines, &count, "{s}", .{aboutUpdateLine()});
-    add(&lines, &count, "", .{});
-    add(&lines, &count, "Click anywhere to close.", .{});
+    add(&lines, &count, columns, "", .{});
+    const settings_label = "Settings: ";
+    var path_buf: [about_storage[0].len]u8 = undefined;
+    const path = text.fitStart(&path_buf, app.config_path orelse "(none)", columns -| @as(u32, settings_label.len));
+    add(&lines, &count, columns, settings_label ++ "{s}", .{path});
+    add(&lines, &count, columns, "", .{});
+    add(&lines, &count, columns, "{s}", .{aboutUpdateLine()});
+    add(&lines, &count, columns, "", .{});
+    add(&lines, &count, columns, "Click anywhere to close.", .{});
 
     var widest: f32 = 0;
     for (lines[0..count]) |line| widest = @max(widest, app.font.widthOf(line));
 
-    const width = widest + layout.padding * 4;
+    const width = widest + inner;
+    const height = @as(f32, @floatFromInt(count)) * cell.height + inner;
     const panel = pen.Rectangle{
-        .x = l.text.x + @max((l.text.width - width) / 2, 0),
-        .y = l.text.y + l.text.height / 5,
+        .x = @round(@max((window_width - width) / 2, 0)),
+        .y = @round(@max(@min(l.text.y + l.text.height / 5, window_bottom - height), 0)),
         .width = width,
-        .height = @as(f32, @floatFromInt(count)) * cell.height + layout.padding * 4,
+        .height = height,
     };
 
     // Dim what is behind so the panel reads as being on top.

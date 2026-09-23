@@ -87,6 +87,19 @@ pub fn width(line: []const u8, tab_width: u8) u32 {
     return columnOf(line, line.len, tab_width);
 }
 
+/// `line` shortened to `columns` by cutting from the start, which keeps the
+/// end of a path, the part that names the file.
+pub fn fitStart(buf: []u8, line: []const u8, columns: u32) [:0]const u8 {
+    const ellipsis = "...";
+    var from: usize = 0;
+    if (width(line, 1) > columns) {
+        const room = columns -| ellipsis.len;
+        while (from < line.len and width(line[from..], 1) > room) from += decode(line, from).len;
+    }
+    const prefix = if (from > 0) ellipsis else "";
+    return std.fmt.bufPrintZ(buf, "{s}{s}", .{ prefix, line[from..] }) catch "";
+}
+
 /// Writes `line` with tabs turned into spaces, so what is drawn lines up with
 /// the columns everything else computes.
 pub fn expand(line: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator, tab_width: u8) !void {
@@ -204,4 +217,11 @@ test "expand turns tabs into spaces" {
     out.clearRetainingCapacity();
     try expand("no tabs", &out, gpa, 4);
     try testing.expectEqualSlices(u8, "no tabs", out.items);
+}
+
+test "a line that fits is left alone, and a long one keeps its end" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("/home/a.txt", fitStart(&buf, "/home/a.txt", 20));
+    try std.testing.expectEqualStrings(".../a.txt", fitStart(&buf, "/home/someone/a.txt", 9));
+    try std.testing.expectEqualStrings("...é.txt", fitStart(&buf, "/home/é.txt", 8));
 }
