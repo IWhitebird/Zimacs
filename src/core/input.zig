@@ -35,17 +35,25 @@ const commands = @import("commands.zig");
 const menu_mod = @import("menu.zig");
 const titlebar = @import("titlebar.zig");
 const find_mod = @import("find.zig");
+const dialog_mod = @import("dialog.zig");
 const TextField = @import("field.zig").TextField;
 const BufferView = @import("buffer.zig").BufferView;
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
+/// Character widths the tab bar moves per wheel notch.
+const tab_wheel_columns = 8;
 /// Two clicks closer together than this count as a double click.
 const multi_click_seconds = 0.35;
 
 var last_click_time: f64 = -1;
 var click_streak: u8 = 0;
 var dragging = false;
+/// Where the text press landed. A drag only starts once the pointer leaves
+/// it, or holding the button after a double click would shrink the word
+/// selection back to the pointer.
+var press_point: pen.Vector2 = .{ .x = 0, .y = 0 };
+var drag_started = false;
 var dragging_bar = false;
 var dragging_hbar = false;
 var caption = Caption{};
@@ -75,6 +83,7 @@ pub const Input = struct {
         _ = ctx;
         // First, so prompts and panels never block moving or closing.
         if (caption.handle()) return;
+        if (try DialogInput.handle()) return;
         if (try FindBar.handle()) return;
         if (app.prompt.active) {
             try runPrompt();
@@ -155,6 +164,31 @@ const Caption = struct {
         if (shape == c.cursor) return;
         c.cursor = shape;
         pen.setMouseCursor(shape);
+    }
+};
+
+/// Keyboard and pointer while a dialog is up. It is modal, so it takes all
+/// input until it is answered.
+const DialogInput = struct {
+    fn handle() !bool {
+        const d = &app.dialog;
+        const q = d.question orelse return false;
+        while (pen.getCharPressed() > 0) {}
+
+        if (pressed(.left) or (pressed(.tab) and shiftDown())) {
+            d.move(-1);
+        } else if (pressed(.right) or pressed(.tab)) {
+            d.move(1);
+        }
+        if (pressed(.escape)) {
+            try commands.answer(q.dismissal());
+        } else if (pressed(.enter) or pressed(.kp_enter)) {
+            if (d.focused()) |a| try commands.answer(a);
+        } else if (pen.isMouseButtonPressed(.left)) {
+            const g = dialog_mod.geometry(editor.currentLayout(), app.font, q);
+            if (dialog_mod.buttonAt(pen.getMousePosition(), g)) |i| try commands.answer(q.answers()[i]);
+        }
+        return true;
     }
 };
 
@@ -391,7 +425,7 @@ fn typeText() !void {
         try view.insert(utf8[0..n]);
     }
 
-    if (pressed(.enter) or pressed(.kp_enter)) try view.insert("\n");
+    if (pressed(.enter) or pressed(.kp_enter)) try view.newline();
     if (pressed(.tab)) {
         // With a selection, Tab shifts the whole block rather than replacing it.
         if (view.cursor.hasSelection()) {
@@ -501,7 +535,7 @@ fn mouse() !void {
 
     if (pen.isMouseButtonPressed(.left)) {
         if (editor.closeAt(point, l)) |index| {
-            try app.buffer.close(index);
+            try commands.requestClose(index);
             return;
         }
         if (editor.tabAt(point, l)) |index| {
@@ -550,6 +584,11 @@ fn mouse() !void {
 
     if (dragging and pen.isMouseButtonDown(.left)) {
         const view = app.buffer.current() orelse return;
+        if (!drag_started) {
+            const moved = @abs(point.x - press_point.x) + @abs(point.y - press_point.y);
+            if (moved < app.font.metrics.width / 2) return;
+            drag_started = true;
+        }
         view.cursor.moveTo(&view.tree, offsetAt(view, point, l), true);
         // Drag past the top or bottom edge to keep scrolling.
         if (point.y < l.text.y) app.editor.scroll(-1);
@@ -591,13 +630,17 @@ fn beginClick(point: pen.Vector2, l: @import("layout.zig").Layout) void {
     const view = app.buffer.current() orelse return;
 
     const now = pen.getTime();
-    click_streak = if (now - last_click_time < multi_click_seconds) click_streak + 1 else 1;
+    // A shift-click extends the selection; it is never half of a double click.
+    const extend = shiftDown();
+    click_streak = if (!extend and now - last_click_time < multi_click_seconds) click_streak + 1 else 1;
     last_click_time = now;
 
     const offset = offsetAt(view, point, l);
+    press_point = point;
+    drag_started = false;
     switch (click_streak) {
         1 => {
-            view.cursor.moveTo(&view.tree, offset, shiftDown());
+            view.cursor.moveTo(&view.tree, offset, extend);
             dragging = true;
         },
         2 => {
@@ -690,6 +733,11 @@ fn scroll() void {
     const wheel = pen.getMouseWheelMove();
     if (wheel == 0) return;
     // Wheel up is positive and should move toward the start of the file.
+    // Over the tab bar the wheel scrolls the tabs instead.
+    if (pen.checkCollisionPointRec(pen.getMousePosition(), editor.currentLayout().tabs)) {
+        app.editor.tabs.scrollBy(-wheel * app.font.metrics.width * tab_wheel_columns);
+        return;
+    }
     const steps: i32 = @intFromFloat(@round(wheel * wheel_lines));
     if (shiftDown()) app.editor.scrollSideways(-steps) else app.editor.scroll(-steps);
 }
@@ -745,12 +793,10 @@ fn commitPrompt() !void {
         .open => app.openFile(chosen) catch |err| report("Could not open", err),
         .save_as => {
             const view = app.buffer.current() orelse return;
-            app.buffer.saveAs(view, chosen) catch |err| report("Could not save", err);
+            commands.saveViewAs(view, chosen);
         },
         .goto_line => commands.gotoLine(chosen),
     }
 }
 
-fn report(what: []const u8, err: anyerror) void {
-    std.debug.print("{s}: {s}\n", .{ what, @errorName(err) });
-}
+const report = commands.report;

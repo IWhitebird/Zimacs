@@ -10,12 +10,16 @@ const Allocator = std.mem.Allocator;
 const buffer_mod = @import("buffer.zig");
 const Buffer = buffer_mod.Buffer;
 const BufferView = buffer_mod.BufferView;
+const Format = buffer_mod.Format;
+const Stamp = buffer_mod.Stamp;
+const textfile = @import("textfile.zig");
 
 pub const dir_name = "session";
 
 const index_name = "index";
 const header_v1 = "zimacs-session 1";
-const header = "zimacs-session 2";
+const header_v2 = "zimacs-session 2";
+const header = "zimacs-session 3";
 const max_index_bytes = 4 * 1024 * 1024;
 const max_text_bytes = 512 * 1024 * 1024;
 
@@ -77,14 +81,22 @@ pub fn save(b: *Buffer, extras: Extras, io: std.Io, gpa: Allocator, dir: []const
             std.fmt.bufPrint(&anchor_buf, "{d}", .{a}) catch "-"
         else
             "-";
+        var size_buf: [24]u8 = undefined;
+        var mtime_buf: [40]u8 = undefined;
+        const size = if (view.disk) |d| std.fmt.bufPrint(&size_buf, "{d}", .{d.size}) catch "-" else "-";
+        const mtime = if (view.disk) |d| std.fmt.bufPrint(&mtime_buf, "{d}", .{d.mtime}) catch "-" else "-";
         // Path last: it is the only field that may contain a tab.
-        try appendLine(&index, gpa, "buffer\t{d}\t{d}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}", .{
+        try appendLine(&index, gpa, "buffer\t{d}\t{d}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}", .{
             i,
             view.cursor.offset,
             view.top_line,
             @intFromBool(keep_text),
             view.left_column,
             anchor,
+            @tagName(view.format.encoding),
+            @tagName(view.format.line_ending),
+            size,
+            mtime,
             view.name,
             view.path orelse "",
         });
@@ -172,7 +184,8 @@ pub fn signature(b: *const Buffer, extras: Extras) u64 {
 
 fn versionOf(first_line: []const u8) ?u8 {
     const line = std.mem.trim(u8, first_line, "\r");
-    if (std.mem.eql(u8, line, header)) return 2;
+    if (std.mem.eql(u8, line, header)) return 3;
+    if (std.mem.eql(u8, line, header_v2)) return 2;
     if (std.mem.eql(u8, line, header_v1)) return 1;
     return null;
 }
@@ -214,11 +227,13 @@ const Entry = struct {
     has_text: bool,
     left_column: u32 = 0,
     anchor: ?u32 = null,
+    format: Format = .{},
+    disk: ?Stamp = null,
     name: []const u8,
     path: []const u8,
 };
 
-/// Version 1 has no horizontal scroll or selection fields.
+/// Version 1 has no scroll or selection fields; version 2 no format or stamp.
 fn parseBuffer(parts: *std.mem.SplitIterator(u8, .scalar), version: u8) ?Entry {
     const index = std.fmt.parseInt(usize, parts.next() orelse return null, 10) catch return null;
     const cursor = std.fmt.parseInt(u32, parts.next() orelse return null, 10) catch return null;
@@ -233,6 +248,16 @@ fn parseBuffer(parts: *std.mem.SplitIterator(u8, .scalar), version: u8) ?Entry {
         anchor = std.fmt.parseInt(u32, raw_anchor, 10) catch null;
     }
 
+    var format = Format{};
+    var disk: ?Stamp = null;
+    if (version >= 3) {
+        format.encoding = std.meta.stringToEnum(textfile.Encoding, parts.next() orelse return null) orelse .utf8;
+        format.line_ending = std.meta.stringToEnum(textfile.LineEnding, parts.next() orelse return null) orelse .lf;
+        const size = std.fmt.parseInt(u64, parts.next() orelse return null, 10) catch null;
+        const mtime = std.fmt.parseInt(i96, parts.next() orelse return null, 10) catch null;
+        if (size != null and mtime != null) disk = .{ .size = size.?, .mtime = mtime.? };
+    }
+
     const name = parts.next() orelse return null;
     return .{
         .index = index,
@@ -241,6 +266,8 @@ fn parseBuffer(parts: *std.mem.SplitIterator(u8, .scalar), version: u8) ?Entry {
         .has_text = has_text,
         .left_column = left,
         .anchor = anchor,
+        .format = format,
+        .disk = disk,
         .name = name,
         .path = parts.rest(),
     };
@@ -257,6 +284,9 @@ fn loadOne(b: *Buffer, io: std.Io, gpa: Allocator, dir: std.Io.Dir, entry: Entry
 
         const view = try b.restore(path, entry.name, text);
         place(view, entry);
+        view.format = entry.format;
+        // The file as it was then, so a change made while closed is noticed.
+        view.disk = entry.disk;
         // Unsaved text differs from disk, so mark it edited.
         view.saved_at = 1;
     } else {
@@ -511,4 +541,43 @@ test "autosave waits for the interval and skips unchanged sessions" {
     try view.insert("x");
     try testing.expect(!a.due(15, &b, .{}));
     try testing.expect(a.due(22, &b, .{}));
+}
+
+test "an unsaved buffer keeps its file format and disk stamp across a restart" {
+    var s = try Scratch.init();
+    defer s.deinit();
+    const session_dir = try s.join("session");
+    defer testing.allocator.free(session_dir);
+
+    var before = testBuffer();
+    defer freeBuffer(&before);
+    const view = try before.newScratch();
+    try view.insert("edited");
+    view.format = .{ .encoding = .windows1252, .line_ending = .crlf };
+    view.disk = .{ .size = 42, .mtime = 1234567890123 };
+    try save(&before, .{}, testing.io, testing.allocator, session_dir);
+
+    var after = testBuffer();
+    defer freeBuffer(&after);
+    try testing.expect(try restore(&after, testing.io, testing.allocator, session_dir));
+    try testing.expectEqual(view.format, after.views.items[0].format);
+    try testing.expectEqual(view.disk.?, after.views.items[0].disk.?);
+}
+
+test "a version 2 session still restores, with the default format" {
+    var s = try Scratch.init();
+    defer s.deinit();
+    try s.tmp.dir.createDirPath(testing.io, "session");
+    try s.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "session/index",
+        .data = "zimacs-session 2\nactive\t0\nbuffer\t0\t1\t0\t1\t0\t-\tuntitled 1\t\n",
+    });
+    try s.tmp.dir.writeFile(testing.io, .{ .sub_path = "session/0.txt", .data = "hi" });
+    const session_dir = try s.join("session");
+    defer testing.allocator.free(session_dir);
+
+    var b = testBuffer();
+    defer freeBuffer(&b);
+    try testing.expect(try restore(&b, testing.io, testing.allocator, session_dir));
+    try testing.expectEqual(Format{}, b.views.items[0].format);
 }

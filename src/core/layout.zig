@@ -29,8 +29,10 @@ pub const Layout = struct {
     /// `titlebar` is set when the menu row is also the window's title bar,
     /// which wants to be a little taller than a menu on its own.
     pub fn compute(cell: Metrics, line_count: u32, show_tabs: bool, titlebar: bool) Layout {
-        const width: f32 = @floatFromInt(pen.getRenderWidth());
-        const height: f32 = @floatFromInt(pen.getRenderHeight());
+        // Logical units, the ones raylib draws and reports the mouse in. The
+        // render size is physical pixels, which differ on a scaled display.
+        const width: f32 = @floatFromInt(pen.getScreenWidth());
+        const height: f32 = @floatFromInt(pen.getScreenHeight());
 
         const menu_height = cell.height + padding * @as(f32, if (titlebar) 2 else 1);
         const tab_height = if (show_tabs) cell.height + padding * 1.5 else 0;

@@ -38,6 +38,8 @@ pub const Browser = @import("core/browser.zig").Browser;
 pub const Update = update_mod.Update;
 pub const Window = @import("core/window.zig").Window;
 pub const Find = @import("core/find.zig").Find;
+pub const Dialog = @import("core/dialog.zig").Dialog;
+pub const Notice = @import("core/notice.zig").Notice;
 
 const leak_checks = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -82,6 +84,8 @@ pub var menu = Menu{};
 pub var browser = Browser{};
 pub var update = Update{};
 pub var find = Find{};
+pub var dialog = Dialog{};
+pub var notice = Notice{};
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
@@ -133,6 +137,7 @@ pub fn run(start: Start) !void {
 
     // After the window exists, because the glyph atlas is a GPU texture, and
     // released before the window closes for the same reason.
+    font.density = pen.getWindowScaleDPI().x;
     try font.load();
     defer font.unload();
 
@@ -141,6 +146,9 @@ pub fn run(start: Start) !void {
     if (data_dir) |d| if (io) |active_io| recent.load(active_io, d) catch {};
 
     try openStartingBuffers(start, session_dir);
+    if (config.problem) |problem| {
+        commands.tell(.problem, "{s} line {d}: {s}", .{ config_mod.file_name, problem.line, problem.why });
+    }
 
     commands.updateInBackground();
 
@@ -154,6 +162,7 @@ pub fn run(start: Start) !void {
 
     while (!window.shouldClose()) {
         if (session_dir) |d| if (autosave.due(pen.getTime(), &buffer, currentExtras())) saveSession(d);
+        if (disk_watch.due(pen.getTime())) commands.checkDisk();
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
 
@@ -165,6 +174,7 @@ pub fn run(start: Start) !void {
 }
 
 var autosave = session.Autosave{};
+var disk_watch = @import("core/buffer.zig").DiskWatch{};
 
 fn lastExtras(session_dir: ?[]const u8) session.Extras {
     const d = session_dir orelse return .{};
@@ -180,7 +190,7 @@ fn saveSession(d: []const u8) void {
     const active_io = io orelse return;
     const extras = currentExtras();
     session.save(&buffer, extras, active_io, gpa, d) catch |err| {
-        std.debug.print("Could not save session: {s}\n", .{@errorName(err)});
+        commands.report("Could not save the session", err);
         return;
     };
     autosave.markSaved(&buffer, extras);
@@ -197,7 +207,7 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
     var opened: usize = 0;
     while (args.next()) |path| {
         openFile(path) catch |err| {
-            std.debug.print("Could not open {s}: {s}\n", .{ path, @errorName(err) });
+            commands.tell(.problem, "Could not open {s}: {s}", .{ path, @errorName(err) });
             continue;
         };
         opened += 1;
@@ -239,6 +249,7 @@ fn reportFrameError(who: []const u8, err: anyerror) void {
         emscripten_console_error(text);
     } else {
         std.debug.print("{s} failed: {s}\n", .{ who, @errorName(err) });
+        commands.report(who, err);
     }
 }
 

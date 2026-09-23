@@ -7,6 +7,7 @@ const pen = @import("raylib");
 const app = @import("../zimacs.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const native = @import("native.zig");
+const commands = @import("commands.zig");
 const Placement = @import("session.zig").Placement;
 const Edges = @import("titlebar.zig").Edges;
 
@@ -87,6 +88,7 @@ pub const Window = struct {
             w.height = pen.getRenderHeight();
         }
         w.trackNormal();
+        try app.font.setDensity(pen.getWindowScaleDPI().x);
         openDroppedFiles();
     }
 
@@ -298,7 +300,7 @@ fn openDroppedFiles() void {
     for (0..dropped.count) |i| {
         const path: [:0]const u8 = std.mem.span(dropped.paths[i]);
         app.openFile(path) catch |err| {
-            std.debug.print("Could not open {s}: {s}\n", .{ path, @errorName(err) });
+            commands.tell(.problem, "Could not open {s}: {s}", .{ path, @errorName(err) });
         };
     }
 }

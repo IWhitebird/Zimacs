@@ -13,6 +13,9 @@ const browser_mod = @import("browser.zig");
 const update_mod = @import("update.zig");
 const find_mod = @import("find.zig");
 const config_mod = @import("config.zig");
+const textfile = @import("textfile.zig");
+const dialog_mod = @import("dialog.zig");
+const notice_mod = @import("notice.zig");
 const selfupdate = @import("selfupdate.zig");
 const build_info = @import("build_info");
 
@@ -21,7 +24,7 @@ pub fn run(action: Action) !void {
         .new_tab => _ = try app.buffer.newScratch(),
         .open_file => try browse(null),
         .open_recent => try app.prompt.beginWith(.open, app.recent.items()),
-        .close_tab => try app.buffer.close(app.buffer.active),
+        .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
         .about => {},
@@ -68,7 +71,90 @@ pub fn run(action: Action) !void {
 pub fn save() !void {
     const view = app.buffer.current() orelse return;
     if (view.path == null) return browseToSave();
-    app.buffer.save(view) catch |err| report("Could not save", err);
+    _ = saveView(view);
+}
+
+/// True when the file was written.
+fn saveView(view: *BufferView) bool {
+    const outcome = app.buffer.save(view) catch |err| {
+        report("Could not save", err);
+        return false;
+    };
+    announceSave(view, outcome);
+    return true;
+}
+
+/// Saves under a new name, then closes the tab if closing is what asked.
+pub fn saveViewAs(view: *BufferView, path: []const u8) void {
+    const outcome = app.buffer.saveAs(view, path) catch |err| return report("Could not save", err);
+    announceSave(view, outcome);
+    if (closing_after_save == view) {
+        closing_after_save = null;
+        if (app.buffer.indexOf(view)) |i| app.buffer.close(i) catch |err| report("Could not close", err);
+    }
+}
+
+fn announceSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
+    if (outcome == .switched_to_utf8) {
+        tell(.problem, "Saved {s} as UTF-8: it has characters its old encoding cannot hold", .{view.name});
+    }
+}
+
+// ------------------------------------------------------------ closing
+
+/// A tab waiting on Save As before it can close.
+var closing_after_save: ?*BufferView = null;
+
+/// Closes a tab, first asking what to do with unsaved changes.
+pub fn requestClose(index: usize) !void {
+    if (index >= app.buffer.views.items.len) return;
+    const view = app.buffer.views.items[index];
+    if (!view.edited()) return app.buffer.close(index);
+    app.buffer.select(index);
+    app.dialog.ask(.{ .close_unsaved = view });
+}
+
+pub fn answer(a: dialog_mod.Answer) !void {
+    const q = app.dialog.question orelse return;
+    app.dialog.close();
+    const view = q.view();
+    const index = app.buffer.indexOf(view) orelse return;
+    switch (a) {
+        .save => if (view.path == null) {
+            closing_after_save = view;
+            try browseToSave();
+        } else if (saveView(view)) {
+            try app.buffer.close(index);
+        },
+        .discard => try app.buffer.close(index),
+        .reload => app.buffer.reload(view) catch |err| report("Could not reload", err),
+        .keep => app.buffer.acknowledgeDisk(view),
+        .cancel => {},
+    }
+}
+
+// ------------------------------------------------------------ the disk
+
+/// Picks up files changed by other programs. Clean buffers are reloaded
+/// quietly; one with unsaved work asks first.
+pub fn checkDisk() void {
+    if (app.dialog.question != null) return;
+    for (app.buffer.views.items) |view| {
+        switch (app.buffer.diskState(view)) {
+            .unchanged => {},
+            .missing => {
+                tell(.problem, "{s} was deleted or moved; saving will write it again", .{view.name});
+                view.disk = null;
+            },
+            .changed => if (view.edited()) {
+                app.dialog.ask(.{ .changed_on_disk = view });
+                return;
+            } else {
+                app.buffer.reload(view) catch |err| report("Could not reload", err);
+                tell(.info, "Reloaded {s}, which changed on disk", .{view.name});
+            },
+        }
+    }
 }
 
 /// Opens the browser to pick where to save. Typing a name and pressing Enter
@@ -106,7 +192,7 @@ pub fn saveInBrowser(typed: []const u8) !void {
     const full = app.browser.resolve(typed) catch |err| return report("Bad path", err);
     defer app.gpa.free(full);
     app.prompt.cancel();
-    app.buffer.saveAs(view, full) catch |err| report("Could not save", err);
+    saveViewAs(view, full);
 }
 
 /// Opens the file browser, starting beside the current file.
@@ -160,7 +246,7 @@ fn startUpdate(options: update_mod.Options) void {
 
 pub fn openConfig() !void {
     const path = app.config_path orelse {
-        std.debug.print("No settings file on this platform\n", .{});
+        tell(.problem, "There is no settings file on this platform", .{});
         return;
     };
     app.openFile(path) catch |err| report("Could not open settings", err);
@@ -183,7 +269,7 @@ pub fn paste(view: *BufferView) !void {
     if (clip.len == 0) return;
 
     // Clipboards carry CRLF on some platforms; the buffer only holds LF.
-    const text = try buffer_mod.toUnixNewlines(app.gpa, clip);
+    const text = try textfile.toLf(app.gpa, clip);
     defer app.gpa.free(text);
     try view.insert(text);
 }
@@ -246,6 +332,10 @@ pub fn gotoLine(typed: []const u8) void {
     view.cursor.moveTo(&view.tree, view.tree.lineStart(line), false);
 }
 
-fn report(what: []const u8, err: anyerror) void {
-    std.debug.print("{s}: {s}\n", .{ what, @errorName(err) });
+pub fn report(what: []const u8, err: anyerror) void {
+    tell(.problem, "{s}: {s}", .{ what, @errorName(err) });
+}
+
+pub fn tell(kind: notice_mod.Notice.Kind, comptime fmt: []const u8, args: anytype) void {
+    app.notice.show(pen.getTime(), kind, fmt, args);
 }

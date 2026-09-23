@@ -74,6 +74,10 @@ pub const Font = struct {
     /// The size from the settings: what Ctrl+0 goes back to, and what the
     /// saved zoom is measured from.
     base: f32 = default_size,
+    /// Physical pixels per logical one. The atlas is rasterised this much
+    /// larger and drawn at the logical size, so text stays sharp when the
+    /// display is scaled.
+    density: f32 = 1,
     spacing: f32 = 0,
     handle: pen.Font = undefined,
     /// Second atlas, for the emoji the text font has no glyphs for.
@@ -90,7 +94,7 @@ pub const Font = struct {
 
     /// Rasterises the font at the current size. Safe to call repeatedly.
     pub fn load(f: *Self) !void {
-        const size: i32 = @intFromFloat(f.size);
+        const size: i32 = @intFromFloat(@round(f.size * f.density));
         const next = try pen.loadFontFromMemory(".ttf", data, size, codepoints);
         if (!pen.isFontValid(next)) return error.InvalidFont;
 
@@ -100,7 +104,7 @@ pub const Font = struct {
         const next_emoji = try pen.loadFontFromMemory(
             ".ttf",
             emoji_data,
-            @intFromFloat(f.size * 2),
+            @intFromFloat(@round(f.size * 2 * f.density)),
             emoji_codepoints,
         );
 
@@ -129,6 +133,13 @@ pub const Font = struct {
         if (f.loaded and next == f.size) return;
         f.size = next;
         try f.load();
+    }
+
+    /// Rerasterises when the window moves to a display with another scale.
+    pub fn setDensity(f: *Self, density: f32) !void {
+        if (density <= 0 or density == f.density) return;
+        f.density = density;
+        if (f.loaded) try f.load();
     }
 
     pub fn zoomIn(f: *Self) !void {

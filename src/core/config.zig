@@ -31,6 +31,7 @@ pub const Colors = struct {
     close_hover: u24 = 0xC42B1C,
     close_hover_text: u24 = 0xFFFFFF,
     find_match: u24 = 0x5C3F12,
+    warning: u24 = 0xE5A94B,
 
     /// Sets the field named `key`, if there is one.
     pub fn apply(c: *Colors, key: []const u8, value: []const u8) !void {
@@ -60,8 +61,17 @@ pub const Config = struct {
     /// Install new releases on startup. Only official builds ever do.
     auto_update: bool = true,
     colors: Colors = .{},
+    /// The first line that could not be used, to tell the user about.
+    problem: ?Problem = null,
+
+    pub const Problem = struct { line: u32, why: []const u8 };
 
     const Self = @This();
+
+    fn note(c: *Self, line: u32, what: []const u8, why: []const u8) void {
+        std.debug.print("{s} line {d}: {s} ({s})\n", .{ file_name, line, why, what });
+        if (c.problem == null) c.problem = .{ .line = line, .why = why };
+    }
 
     /// Applies every `key = value` line in `text`. Bad lines are reported and
     /// skipped so one typo cannot stop the editor starting.
@@ -74,12 +84,12 @@ pub const Config = struct {
             if (line.len == 0 or line[0] == '#') continue;
 
             const split = std.mem.indexOfScalar(u8, line, '=') orelse {
-                report(number, line, "expected key = value");
+                c.note(number, line, "expected key = value");
                 continue;
             };
             const key = trim(line[0..split]);
             const value = trim(line[split + 1 ..]);
-            c.applyPair(key, value) catch report(number, key, "bad value");
+            c.applyPair(key, value) catch c.note(number, key, "bad value");
         }
     }
 
@@ -209,6 +219,7 @@ const default_text =
     \\close_hover = #c42b1c
     \\close_hover_text = #ffffff
     \\find_match = #5c3f12
+    \\warning = #e5a94b
     \\
 ;
 
@@ -230,10 +241,6 @@ fn eq(a: []const u8, b: []const u8) bool {
 
 fn trim(s: []const u8) []const u8 {
     return std.mem.trim(u8, s, " \t\r");
-}
-
-fn report(line: u32, what: []const u8, why: []const u8) void {
-    std.debug.print("{s} line {d}: {s} ({s})\n", .{ file_name, line, why, what });
 }
 
 // ---------------------------------------------------------------- tests
@@ -311,4 +318,10 @@ test "a setting the file lacks is appended, and a commented one is left alone" {
     var c = Config{};
     c.applyText(after);
     try testing.expect(c.wrap_lines);
+}
+
+test "the first bad line is remembered so it can be shown" {
+    var c = Config{};
+    c.applyText("font_size = 18\nnonsense\ntab_width = lots\n");
+    try testing.expectEqual(@as(u32, 2), c.problem.?.line);
 }

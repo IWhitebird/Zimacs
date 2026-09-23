@@ -27,6 +27,7 @@ pub const Theme = struct {
     close_hover: pen.Color,
     close_hover_text: pen.Color,
     find_match: pen.Color,
+    warning: pen.Color,
 };
 
 pub var current: Theme = build(.{});
@@ -56,6 +57,7 @@ fn build(c: Colors) Theme {
         .close_hover = rgb(c.close_hover),
         .close_hover_text = rgb(c.close_hover_text),
         .find_match = rgb(c.find_match),
+        .warning = rgb(c.warning),
     };
 }
 

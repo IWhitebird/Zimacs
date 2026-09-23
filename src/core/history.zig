@@ -41,6 +41,9 @@ pub const History = struct {
     applied: usize = 0,
     /// Oldest entries are dropped once there are more than this.
     limit: usize = 1000,
+    /// Set at a save point, so the next edit starts an entry of its own
+    /// instead of joining one that has already been saved.
+    sealed: bool = false,
 
     const Self = @This();
 
@@ -110,7 +113,16 @@ pub const History = struct {
 
     /// Folds `edit` into the previous one when they are part of the same
     /// gesture. Returns true if it was absorbed.
+    /// Stops the next edit merging into the current entry.
+    pub fn seal(h: *Self) void {
+        h.sealed = true;
+    }
+
     fn merge(h: *Self, edit: Edit) !bool {
+        if (h.sealed) {
+            h.sealed = false;
+            return false;
+        }
         if (h.applied == 0 or h.applied != h.edits.items.len) return false;
         const last = &h.edits.items[h.applied - 1];
 

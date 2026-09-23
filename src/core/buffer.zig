@@ -15,6 +15,8 @@ const PieceTree = @import("piecetree.zig").PieceTree;
 const Cursor = @import("cursor.zig").Cursor;
 const History = @import("history.zig").History;
 const text_mod = @import("text.zig");
+const textfile = @import("textfile.zig");
+pub const Format = textfile.Format;
 
 /// Refuse anything larger. Piece tree offsets are u32, so 4 GiB is the hard
 /// ceiling; this sits well below it.
@@ -49,10 +51,20 @@ pub const BufferView = struct {
     saved_at: usize = 0,
     /// Bumped by every change to the text, so derived results know to refresh.
     version: u64 = 0,
+    /// How the file on disk is encoded, restored on save.
+    format: Format = .{},
+    /// The file as last read or written, to notice changes made elsewhere.
+    disk: ?Stamp = null,
 
     const Self = @This();
 
     /// True when the text differs from the file on disk.
+    /// Records that the text now matches the file.
+    pub fn markSaved(v: *Self) void {
+        v.saved_at = v.history.applied;
+        v.history.seal();
+    }
+
     pub fn edited(v: Self) bool {
         return v.history.applied != v.saved_at;
     }
@@ -198,17 +210,51 @@ pub const BufferView = struct {
     }
 
     /// Starts a fresh line below the caret's, wherever the caret sits.
+    /// Breaks the line at the caret, carrying its indentation onto the new one.
+    pub fn newline(v: *Self) !void {
+        const at = if (v.cursor.selection()) |r| r.start else v.cursor.offset;
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(v.gpa);
+        try text.append(v.gpa, '\n');
+        try v.appendIndent(v.tree.positionAt(at).line, at, &text);
+        try v.insert(text.items);
+    }
+
     pub fn openLineBelow(v: *Self) !void {
-        const end = v.tree.lineEnd(v.cursorLine());
-        try v.edit(end, 0, "\n");
+        const line = v.cursorLine();
+        const end = v.tree.lineEnd(line);
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(v.gpa);
+        try text.append(v.gpa, '\n');
+        try v.appendIndent(line, end, &text);
+        try v.edit(end, 0, text.items);
     }
 
     /// Starts a fresh line above the caret's.
     pub fn openLineAbove(v: *Self) !void {
-        const start = v.tree.lineStart(v.cursorLine());
-        try v.edit(start, 0, "\n");
-        v.cursor.offset = start;
+        const line = v.cursorLine();
+        const start = v.tree.lineStart(line);
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(v.gpa);
+        try v.appendIndent(line, v.tree.lineEnd(line), &text);
+        const indent: u32 = @intCast(text.items.len);
+        try text.append(v.gpa, '\n');
+        try v.edit(start, 0, text.items);
+        v.cursor.offset = start + indent;
         v.cursor.afterEdit(&v.tree);
+    }
+
+    /// The leading spaces and tabs of `line`, stopping at `before`.
+    fn appendIndent(v: *const Self, line: u32, before: u32, out: *std.ArrayList(u8)) !void {
+        const start = v.tree.lineStart(line);
+        const stop = @min(before, v.tree.lineEnd(line));
+        if (stop <= start) return;
+        var head: std.ArrayList(u8) = .empty;
+        defer head.deinit(v.gpa);
+        try v.tree.copy(start, stop - start, &head);
+        var n: usize = 0;
+        while (n < head.items.len and (head.items[n] == ' ' or head.items[n] == '\t')) n += 1;
+        try out.appendSlice(v.gpa, head.items[0..n]);
     }
 
     /// The lines the selection touches, or just the caret's line.
@@ -411,18 +457,64 @@ pub const Buffer = struct {
         }
 
         const io = b.io orelse return error.NoFilesystem;
+        const stamp = stampOf(io, path);
         const raw = try std.Io.Dir.cwd().readFileAlloc(io, path, b.gpa, .limited(max_bytes));
         defer b.gpa.free(raw);
 
-        const text = try toUnixNewlines(b.gpa, raw);
-        defer b.gpa.free(text);
+        const decoded = try textfile.decode(b.gpa, raw);
+        defer b.gpa.free(decoded.text);
 
         const owned_path = try b.gpa.dupe(u8, path);
         errdefer b.gpa.free(owned_path);
         const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
         errdefer b.gpa.free(name);
 
-        _ = try b.add(try PieceTree.initFromBytes(b.gpa, text), owned_path, name);
+        const view = try b.add(try PieceTree.initFromBytes(b.gpa, decoded.text), owned_path, name);
+        view.format = decoded.format;
+        view.disk = stamp;
+    }
+
+    /// Rereads the file from disk, as one undoable edit.
+    pub fn reload(b: *Self, view: *BufferView) !void {
+        const io = b.io orelse return error.NoFilesystem;
+        const path = view.path orelse return error.NoFileName;
+        const stamp = stampOf(io, path);
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, path, b.gpa, .limited(max_bytes));
+        defer b.gpa.free(raw);
+        const decoded = try textfile.decode(b.gpa, raw);
+        defer b.gpa.free(decoded.text);
+
+        const caret = view.cursor.offset;
+        const top = view.top_line;
+        try view.edit(0, view.tree.len(), decoded.text);
+        view.cursor.moveTo(&view.tree, @min(caret, view.tree.len()), false);
+        view.top_line = @min(top, view.tree.lineCount() -| 1);
+        view.followed = view.cursor.offset;
+        view.format = decoded.format;
+        view.markSaved();
+        view.disk = stamp;
+    }
+
+    pub fn diskState(b: *const Self, view: *const BufferView) DiskState {
+        const io = b.io orelse return .unchanged;
+        const path = view.path orelse return .unchanged;
+        const known = view.disk orelse return .unchanged;
+        const now = stampOf(io, path) orelse return .missing;
+        return if (std.meta.eql(now, known)) .unchanged else .changed;
+    }
+
+    /// Marks the file's current state as seen, so it is not reported again.
+    pub fn acknowledgeDisk(b: *const Self, view: *BufferView) void {
+        const io = b.io orelse return;
+        const path = view.path orelse return;
+        view.disk = stampOf(io, path);
+    }
+
+    pub fn indexOf(b: *const Self, view: *const BufferView) ?usize {
+        for (b.views.items, 0..) |v, i| {
+            if (v == view) return i;
+        }
+        return null;
     }
 
     /// Opens a buffer holding `text` that remembers `path`. Used when a saved
@@ -464,16 +556,34 @@ pub const Buffer = struct {
         if (b.active >= b.views.items.len) b.active = b.views.items.len - 1;
     }
 
-    pub fn save(b: *Self, view: *BufferView) !void {
+    pub const Saved = enum { as_before, switched_to_utf8 };
+
+    /// Writes the file in its own format. Text the file's encoding cannot
+    /// hold is saved as UTF-8 instead, and reported, rather than lost.
+    pub fn save(b: *Self, view: *BufferView) !Saved {
         const io = b.io orelse return error.NoFilesystem;
         const path = view.path orelse return error.NoFileName;
         const text = try view.tree.allocText(b.gpa);
         defer b.gpa.free(text);
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = text });
-        view.saved_at = view.history.applied;
+
+        var outcome = Saved.as_before;
+        const bytes = textfile.encode(b.gpa, text, view.format) catch |err| switch (err) {
+            error.Unrepresentable => blk: {
+                view.format.encoding = .utf8;
+                outcome = .switched_to_utf8;
+                break :blk try textfile.encode(b.gpa, text, view.format);
+            },
+            else => return err,
+        };
+        defer b.gpa.free(bytes);
+
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+        view.markSaved();
+        view.disk = stampOf(io, path);
+        return outcome;
     }
 
-    pub fn saveAs(b: *Self, view: *BufferView, path: []const u8) !void {
+    pub fn saveAs(b: *Self, view: *BufferView, path: []const u8) !Saved {
         const owned_path = try b.gpa.dupe(u8, path);
         errdefer b.gpa.free(owned_path);
         const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
@@ -483,7 +593,7 @@ pub const Buffer = struct {
         b.gpa.free(view.name);
         view.path = owned_path;
         view.name = name;
-        try b.save(view);
+        return b.save(view);
     }
 };
 
@@ -500,24 +610,30 @@ fn isTrailingByte(byte: u8) bool {
     return byte & 0b1100_0000 == 0b1000_0000;
 }
 
-/// Turns CRLF into LF. A lone CR is left alone, since it can legitimately
-/// appear in text.
-///
-/// A CRLF file will therefore not save back byte-identical. Carrying CRLF
-/// through the piece tree means a piece boundary can split the pair, which is
-/// complexity we have not taken on.
-pub fn toUnixNewlines(gpa: Allocator, bytes: []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(gpa);
-    try out.ensureTotalCapacity(gpa, bytes.len);
+/// A file's size and modification time, enough to tell it was changed.
+pub const Stamp = struct {
+    size: u64,
+    mtime: i96,
+};
 
-    var i: usize = 0;
-    while (i < bytes.len) : (i += 1) {
-        if (bytes[i] == '\r' and i + 1 < bytes.len and bytes[i + 1] == '\n') continue;
-        out.appendAssumeCapacity(bytes[i]);
-    }
-    return out.toOwnedSlice(gpa);
+pub const DiskState = enum { unchanged, changed, missing };
+
+pub fn stampOf(io: std.Io, path: []const u8) ?Stamp {
+    const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    return .{ .size = st.size, .mtime = st.mtime.nanoseconds };
 }
+
+/// Checks the disk every so often rather than every frame.
+pub const DiskWatch = struct {
+    interval: f64 = 2,
+    last_check: f64 = 0,
+
+    pub fn due(w: *DiskWatch, now: f64) bool {
+        if (now - w.last_check < w.interval) return false;
+        w.last_check = now;
+        return true;
+    }
+};
 
 // ---------------------------------------------------------------- tests
 
@@ -861,18 +977,6 @@ test "indent with no selection does the caret's line only" {
     try testing.expectEqualSlices(u8, "one\n    two\n", text);
 }
 
-test "toUnixNewlines" {
-    const gpa = testing.allocator;
-
-    const crlf = try toUnixNewlines(gpa, "a\r\nb\r\n");
-    defer gpa.free(crlf);
-    try testing.expectEqualSlices(u8, "a\nb\n", crlf);
-
-    const lone_cr = try toUnixNewlines(gpa, "a\rb");
-    defer gpa.free(lone_cr);
-    try testing.expectEqualSlices(u8, "a\rb", lone_cr);
-}
-
 test "saveAs renames the buffer and survives the caller reusing its path buffer" {
     const gpa = testing.allocator;
     var threaded: std.Io.Threaded = .init(gpa, .{});
@@ -900,10 +1004,65 @@ test "saveAs renames the buffer and survives the caller reusing its path buffer"
     defer typed.deinit(gpa);
     try typed.appendSlice(gpa, path);
 
-    try b.saveAs(view, typed.items);
+    _ = try b.saveAs(view, typed.items);
     @memset(typed.items, 0xAA);
 
     try testing.expectEqualSlices(u8, "saved.txt", view.name);
     try testing.expectEqualSlices(u8, path, view.path.?);
     try testing.expect(!view.edited());
+}
+
+test "enter carries the line's indentation onto the new line" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    const v = try b.newScratch();
+    try v.insert("\t  if (x) {");
+    try v.newline();
+    try v.insert("y");
+    const out = try v.tree.allocText(testing.allocator);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("\t  if (x) {\n\t  y", out);
+}
+
+test "enter inside the indentation only carries what is before the caret" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    const v = try b.newScratch();
+    try v.insert("    x");
+    v.cursor.moveTo(&v.tree, 2, false);
+    try v.newline();
+    const out = try v.tree.allocText(testing.allocator);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("  \n    x", out);
+}
+
+test "open line above and below keep the indentation too" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    const v = try b.newScratch();
+    try v.insert("  mid");
+    try v.openLineBelow();
+    try v.insert("low");
+    v.cursor.moveTo(&v.tree, 0, false);
+    try v.openLineAbove();
+    try v.insert("top");
+    const out = try v.tree.allocText(testing.allocator);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("  top\n  mid\n  low", out);
+}
+
+test "typing straight after a save still counts as unsaved" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    const v = try b.newScratch();
+    try v.insert("a");
+    v.markSaved();
+    try testing.expect(!v.edited());
+
+    // Adjacent typing would normally merge into the entry just saved.
+    try v.insert("b");
+    try testing.expect(v.edited());
+
+    try v.undo();
+    try testing.expect(!v.edited());
 }

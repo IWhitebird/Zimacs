@@ -16,6 +16,8 @@ const find_mod = @import("find.zig");
 const search = @import("search.zig");
 const commands = @import("commands.zig");
 const TextField = @import("field.zig").TextField;
+const TabStrip = @import("tabstrip.zig").TabStrip;
+const dialog_mod = @import("dialog.zig");
 const wrap = @import("wrap.zig");
 const update_mod = @import("update.zig");
 const Artifact = @import("artifact.zig").Artifact;
@@ -35,6 +37,8 @@ pub const Editor = struct {
     row_lines: std.ArrayList(?u32) = .empty,
     /// Search matches on screen this frame.
     matches: std.ArrayList(search.Match) = .empty,
+    tabs: TabStrip = .{},
+    tab_widths: std.ArrayList(f32) = .empty,
 
     const Self = @This();
 
@@ -59,6 +63,7 @@ pub const Editor = struct {
         e.status.deinit(app.gpa);
         e.row_lines.deinit(app.gpa);
         e.matches.deinit(app.gpa);
+        e.tab_widths.deinit(app.gpa);
     }
 
     pub fn render(ctx: *anyopaque) !void {
@@ -69,6 +74,7 @@ pub const Editor = struct {
         const view = app.buffer.current() orelse {
             try drawHint(l, cell);
             drawMenu(l, cell);
+            drawDialog(l, cell);
             drawFrame(l);
             return;
         };
@@ -77,12 +83,13 @@ pub const Editor = struct {
         try e.drawText(view, l, cell);
         try e.drawGutter(view, l, cell);
         drawScrollbars(view, l, cell);
-        drawTabs(l);
+        try e.drawTabs(l);
         try e.drawStatus(view, l, cell);
         try e.drawPrompt(l, cell);
         try drawFindBar(l, cell);
         // Last, so the dropdown and the About panel sit over everything else.
         drawMenu(l, cell);
+        drawDialog(l, cell);
         drawFrame(l);
     }
 
@@ -387,8 +394,12 @@ pub const Editor = struct {
         }
     }
 
-    fn drawTabs(l: Layout) void {
+    fn drawTabs(e: *Self, l: Layout) !void {
         if (l.tabs.height <= 0) return;
+        e.tab_widths.clearRetainingCapacity();
+        for (app.buffer.views.items) |view| try e.tab_widths.append(app.gpa, tabWidth(view));
+        e.tabs.update(e.tab_widths.items, l.tabs.width, app.buffer.active);
+
         pen.drawRectangleRec(l.tabs, theme.current.tab_background);
         pen.beginScissorMode(
             @intFromFloat(l.tabs.x),
@@ -421,6 +432,7 @@ pub const Editor = struct {
                     theme.current.tab_text);
             }
         }
+        drawOverflowFades(l.tabs, e.tabs);
     }
 
     fn drawStatus(e: *Self, view: *BufferView, l: Layout, cell: Metrics) !void {
@@ -442,15 +454,24 @@ pub const Editor = struct {
         else
             std.fmt.bufPrintZ(&label_buf, "Ln {d}, Col {d}", .{ at.line, at.column }) catch return;
 
-        const right_x = layout.rightAlign(l.status, app.font.widthOf(label));
-
-        if (updateNotice()) |notice| {
-            app.font.draw(
-                notice,
-                right_x - app.font.widthOf(notice) - layout.padding * 2,
-                y,
-                if (app.update.status() == .available) theme.current.caret else theme.current.hint,
-            );
+        // Right to left: position, file format, update state, then a notice.
+        var format_buf: [48]u8 = undefined;
+        const format = std.fmt.bufPrintZ(&format_buf, "{s}  {s}", .{
+            view.format.encoding.label(), view.format.line_ending.label(),
+        }) catch "";
+        const t = theme.current;
+        const segments = [_]?Segment{
+            .{ .text = label, .colour = t.status_text },
+            .{ .text = format, .colour = t.status_text },
+            if (updateNotice()) |n| Segment{ .text = n, .colour = if (app.update.status() == .available) t.caret else t.hint } else null,
+            if (app.notice.text(pen.getTime())) |n| Segment{ .text = n, .colour = if (app.notice.kind == .problem) t.warning else t.status_text } else null,
+        };
+        var right_x = l.status.x + l.status.width - layout.padding;
+        for (segments) |maybe| {
+            const seg = maybe orelse continue;
+            right_x -= app.font.widthOf(seg.text);
+            app.font.draw(seg.text, right_x, y, seg.colour);
+            right_x -= layout.padding * 3;
         }
 
         e.status.clearRetainingCapacity();
@@ -471,8 +492,6 @@ pub const Editor = struct {
             theme.current.status_text,
         );
         pen.endScissorMode();
-
-        app.font.draw(label, right_x, y, theme.current.status_text);
     }
 
     /// The Find / Open panel, with its suggestion list.
@@ -598,6 +617,39 @@ fn drawTick(rect: pen.Rectangle, ink: pen.Color) void {
     const y = rect.y + (rect.height - size) / 2;
     pen.drawLineEx(.{ .x = x, .y = y + size * 0.55 }, .{ .x = x + size * 0.38, .y = y + size }, 1.6, ink);
     pen.drawLineEx(.{ .x = x + size * 0.38, .y = y + size }, .{ .x = x + size, .y = y }, 1.6, ink);
+}
+
+// --------------------------------------------------------------- dialog
+
+/// How much the window behind a dialog is dimmed.
+const dim_alpha = 0.55;
+
+fn drawDialog(l: Layout, cell: Metrics) void {
+    const q = app.dialog.question orelse return;
+    const t = theme.current;
+    const window = pen.Rectangle{ .x = 0, .y = 0, .width = l.menu.width, .height = l.status.y + l.status.height };
+    pen.drawRectangleRec(window, pen.fade(t.tab_background, dim_alpha));
+
+    const g = dialog_mod.geometry(l, app.font, q);
+    pen.drawRectangleRec(g.panel, t.tab_background);
+    pen.drawRectangleLinesEx(g.panel, 1, t.scrollbar);
+
+    var title_buf: [dialog_mod.title_capacity]u8 = undefined;
+    const x = g.panel.x + layout.padding * 3;
+    const top = g.panel.y + layout.padding * 3;
+    app.font.draw(dialog_mod.title(&title_buf, q), x, top, t.tab_text_active);
+    app.font.draw(dialog_mod.detail(q), x, top + cell.height + layout.padding / 2, t.hint);
+
+    const point = pen.getMousePosition();
+    for (g.buttons[0..g.count], q.answers(), 0..) |r, a, i| {
+        const focused = i == app.dialog.focus;
+        const hot = pen.checkCollisionPointRec(point, r);
+        pen.drawRectangleRec(r, if (focused) t.selection else if (hot) t.tab_active else t.background);
+        pen.drawRectangleLinesEx(r, 1, if (focused) t.caret else t.scrollbar);
+        const text_label = dialog_mod.label(a);
+        const tx = r.x + (r.width - app.font.widthOf(text_label)) / 2;
+        app.font.draw(text_label, tx, r.y + (r.height - cell.height) / 2, if (focused or hot) t.tab_text_active else t.text);
+    }
 }
 
 // ------------------------------------------------------------- find bar
@@ -932,17 +984,36 @@ pub fn visibleColumns(l: Layout, cell: Metrics) u32 {
 }
 
 /// Where tab `index` sits, or null if it has scrolled off the right edge.
+/// Null when the tab is scrolled wholly out of the strip.
 pub fn tabRect(index: usize, l: Layout) ?pen.Rectangle {
-    var x = l.tabs.x;
+    var x = l.tabs.x - app.editor.tabs.scroll;
     for (app.buffer.views.items, 0..) |view, i| {
         const width = tabWidth(view);
         if (i == index) {
-            if (x >= l.tabs.x + l.tabs.width) return null;
+            if (x >= l.tabs.x + l.tabs.width or x + width <= l.tabs.x) return null;
             return .{ .x = x, .y = l.tabs.y, .width = width, .height = l.tabs.height };
         }
         x += width;
     }
     return null;
+}
+
+const Segment = struct { text: [:0]const u8, colour: pen.Color };
+
+/// Width of the fade that marks tabs hidden past an edge.
+const fade_width = 24;
+
+fn drawOverflowFades(strip: pen.Rectangle, tabs: TabStrip) void {
+    const solid = theme.current.tab_background;
+    const clear = pen.Color{ .r = solid.r, .g = solid.g, .b = solid.b, .a = 0 };
+    const h: i32 = @intFromFloat(strip.height);
+    const y: i32 = @intFromFloat(strip.y);
+    if (tabs.hiddenLeft()) {
+        pen.drawRectangleGradientH(@intFromFloat(strip.x), y, fade_width, h, solid, clear);
+    }
+    if (tabs.hiddenRight()) {
+        pen.drawRectangleGradientH(@intFromFloat(strip.x + strip.width - fade_width), y, fade_width, h, clear, solid);
+    }
 }
 
 /// Which tab is under `point`, if any.

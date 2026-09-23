@@ -18,10 +18,18 @@ interface. No GTK, no Electron, no toolkit to install.
 
 - **Piece-tree text storage**, the same design VS Code uses, so edits stay
   fast in large files
-- **Tabs**, with close buttons and an unsaved marker
+- **Tabs**, with close buttons, an unsaved marker, and a tab bar that scrolls
+  when they no longer fit
+- **Never loses work**: asks before closing a tab with unsaved changes, and
+  notices when another program changes an open file, reloading it if you have
+  not touched it or asking if you have
+- **Files stay as they were**: the encoding (UTF-8, UTF-8 with BOM, UTF-16,
+  Windows-1252) and line endings (LF or CRLF) are kept on save, so an edited
+  file only differs where you changed it
 - **Undo and redo**, coalescing runs of typing so one undo removes a word
-- **Selection** by keyboard, mouse drag, double-click for a word, triple-click
-  for a line
+- **Selection** by keyboard, mouse drag, shift+click, double-click for a word,
+  triple-click for a line
+- **Keeps indentation** when you press Enter
 - **Find and replace** in a bar with match case and whole word options, a
   live match count, and Replace All as a single undo step (`Ctrl+F`, `Ctrl+H`,
   `F3`)
@@ -31,6 +39,7 @@ interface. No GTK, no Electron, no toolkit to install.
   with unsaved work, cursors, selections, scroll, zoom and window placement.
   Saved every few seconds too, so a crash or shutdown loses almost nothing
 - **Word wrap**, toggled from the View menu or `Alt+Z`
+- **High-DPI aware**: sharp text and a correct layout on scaled displays
 - **UTF-8** throughout, including monochrome emoji
 - **Configurable** colours, font size, caret style, tab width
 
