@@ -23,6 +23,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/browser.zig", .raylib = false },
     .{ .path = "src/core/update.zig", .raylib = false },
     .{ .path = "src/core/selfupdate.zig", .raylib = false },
+    .{ .path = "src/core/https.zig", .raylib = false },
     .{ .path = "src/core/menu.zig", .raylib = true },
     .{ .path = "src/core/titlebar.zig", .raylib = true },
     .{ .path = "src/core/native.zig", .raylib = true },
@@ -68,6 +69,7 @@ pub fn build(b: *std.Build) void {
     exe_module.addAnonymousImport("emoji_data", .{ .root_source_file = emoji_file });
     exe_module.addAnonymousImport("icon_data", .{ .root_source_file = icon_file });
     exe_module.addAnonymousImport("welcome_data", .{ .root_source_file = welcome_file });
+    addRootCerts(b, exe_module);
     exe_module.addOptions("build_info", build_info);
     exe_module.linkLibrary(raylib_lib);
 
@@ -124,6 +126,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
+        addRootCerts(b, module);
         if (file.raylib) {
             module.addImport("raylib", raylib);
             module.addImport("raygui", raygui);
@@ -137,4 +140,10 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = module });
         test_step.dependOn(&b.addRunArtifact(tests).step);
     }
+}
+
+/// The certificates `src/core/https.zig` trusts on top of the system's.
+fn addRootCerts(b: *std.Build, module: *std.Build.Module) void {
+    module.addAnonymousImport("usertrust_ecc_root", .{ .root_source_file = b.path("assets/certs/usertrust-ecc.der") });
+    module.addAnonymousImport("isrg_root_x1", .{ .root_source_file = b.path("assets/certs/isrg-root-x1.der") });
 }

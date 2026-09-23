@@ -52,7 +52,7 @@ jobs:
         # -Dcpu=baseline: without it a native build targets the runner's own
         # CPU, and the binary dies with SIGILL on anything older.
         # -Dself-update: only builds from here install new releases themselves.
-      - run: zig build -Dcpu=baseline -Doptimize=ReleaseFast -Dself-update=true
+      - run: zig build -Dcpu=baseline -Doptimize=ReleaseSafe -Dself-update=true
 
         # The v0.1.0 binaries shipped with AVX in them and died with SIGILL on
         # older processors. A baseline x86-64 build has no VEX-encoded
@@ -102,7 +102,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseFast -Dself-update=true
+      - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseSafe -Dself-update=true
 
       - name: Check the binary is really baseline
         run: |

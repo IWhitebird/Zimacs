@@ -5,6 +5,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const selfupdate = @import("selfupdate.zig");
+const https = @import("https.zig");
 
 pub const releases_url = "https://github.com/IWhitebird/Zimacs/releases";
 const api_url = "https://api.github.com/repos/IWhitebird/Zimacs/releases/latest";
@@ -84,6 +85,9 @@ pub const Update = struct {
     state: std.atomic.Value(State) = .init(.idle),
     /// Written by the worker before it publishes `state`.
     latest: Version = .{},
+    /// Why the last check or install failed, for the About box. Written
+    /// before the state that publishes it.
+    problem: ?[:0]const u8 = null,
     announce: bool = true,
 
     const Self = @This();
@@ -101,6 +105,7 @@ pub const Update = struct {
         }
 
         u.announce = options.announce;
+        u.problem = null;
         u.state.store(.checking, .release);
         const thread = std.Thread.spawn(.{}, work, .{ u, gpa, io, current, options }) catch {
             u.state.store(.failed, .release);
@@ -112,7 +117,12 @@ pub const Update = struct {
     fn work(u: *Self, gpa: std.mem.Allocator, io: std.Io, current: Version, options: Options) void {
         const latest = fetchLatest(gpa, io) catch |err| {
             // Nothing published yet means there is nothing to be behind.
-            u.state.store(if (err == error.NoReleases) .up_to_date else .failed, .release);
+            if (err == error.NoReleases) {
+                u.state.store(.up_to_date, .release);
+                return;
+            }
+            u.problem = @errorName(err);
+            u.state.store(.failed, .release);
             return;
         };
         // Written before the state that publishes it.
@@ -127,8 +137,9 @@ pub const Update = struct {
         }
 
         u.state.store(.downloading, .release);
-        selfupdate.fetchAndInstall(gpa, io, latest) catch {
+        selfupdate.fetchAndInstall(gpa, io, latest) catch |err| {
             // Still worth telling the user it exists.
+            u.problem = @errorName(err);
             u.state.store(.available, .release);
             return;
         };
@@ -136,28 +147,16 @@ pub const Update = struct {
     }
 };
 
-const FetchError = error{ NoReleases, Unavailable };
+fn fetchLatest(gpa: std.mem.Allocator, io: std.Io) !Version {
+    const response = try https.get(gpa, io, api_url, &.{
+        .{ .name = "accept", .value = "application/vnd.github+json" },
+        .{ .name = "user-agent", .value = "zimacs" },
+    }, max_response);
+    defer gpa.free(response.body);
 
-fn fetchLatest(gpa: std.mem.Allocator, io: std.Io) FetchError!Version {
-    var client = std.http.Client{ .allocator = gpa, .io = io };
-    defer client.deinit();
-
-    var body: std.Io.Writer.Allocating = .init(gpa);
-    defer body.deinit();
-
-    const result = client.fetch(.{
-        .location = .{ .url = api_url },
-        .response_writer = &body.writer,
-        .extra_headers = &.{
-            .{ .name = "accept", .value = "application/vnd.github+json" },
-            .{ .name = "user-agent", .value = "zimacs" },
-        },
-    }) catch return error.Unavailable;
-
-    if (result.status == .not_found) return error.NoReleases;
-    if (result.status != .ok) return error.Unavailable;
-    if (body.written().len > max_response) return error.Unavailable;
-    return tagFromJson(gpa, body.written()) orelse error.Unavailable;
+    if (response.status == .not_found) return error.NoReleases;
+    if (response.status != .ok) return error.GitHubRefused;
+    return tagFromJson(gpa, response.body) orelse error.UnreadableRelease;
 }
 
 // ---------------------------------------------------------------- tests

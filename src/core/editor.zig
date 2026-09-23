@@ -857,15 +857,17 @@ fn drawDropdown(index: usize, l: Layout, cell: Metrics, point: pen.Vector2) void
     }
 }
 
-var about_storage: [8][160]u8 = undefined;
+const about_capacity = 12;
+var about_storage: [about_capacity][160]u8 = undefined;
 
 fn drawAbout(l: Layout, cell: Metrics) void {
     const builtin = @import("builtin");
-    var lines: [8][:0]const u8 = undefined;
+    var lines: [about_capacity][:0]const u8 = undefined;
     var count: usize = 0;
 
     const add = struct {
-        fn go(out: *[8][:0]const u8, n: *usize, comptime fmt: []const u8, args: anytype) void {
+        fn go(out: *[about_capacity][:0]const u8, n: *usize, comptime fmt: []const u8, args: anytype) void {
+            if (n.* == out.len) return;
             out[n.*] = std.fmt.bufPrintZ(&about_storage[n.*], fmt, args) catch "";
             n.* += 1;
         }
@@ -925,8 +927,12 @@ fn updateNotice() ?[:0]const u8 {
         .checking => if (loud) "checking for updates..." else null,
         .up_to_date => if (loud) "up to date" else null,
         .failed => if (loud) "update check failed" else null,
-        .available => std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available", .{ v.major, v.minor, v.patch }) catch
-            "update available",
+        .available => if (app.update.problem != null)
+            std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available, could not install it", .{ v.major, v.minor, v.patch }) catch
+                "update available, could not install it"
+        else
+            std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available", .{ v.major, v.minor, v.patch }) catch
+                "update available",
         .downloading => std.fmt.bufPrintZ(&notice_buf, "updating to v{d}.{d}.{d}...", .{ v.major, v.minor, v.patch }) catch
             "updating...",
         .installed => std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} installed, restart to use it", .{ v.major, v.minor, v.patch }) catch
@@ -943,10 +949,17 @@ fn aboutUpdateLine() [:0]const u8 {
         .idle => "Help > Check for Updates",
         .checking => "Checking for updates...",
         .up_to_date => "This is the latest release.",
-        .failed => "Could not reach GitHub.",
-        .available => std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out: {s}", .{
-            v.major, v.minor, v.patch, update_mod.releases_url,
-        }) catch "A newer version is available.",
+        .failed => std.fmt.bufPrintZ(&about_update_buf, "Could not reach GitHub ({s}).", .{
+            app.update.problem orelse "unknown",
+        }) catch "Could not reach GitHub.",
+        .available => if (app.update.problem) |why|
+            std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out but did not install ({s}).", .{
+                v.major, v.minor, v.patch, why,
+            }) catch "A newer version is out but did not install."
+        else
+            std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out: {s}", .{
+                v.major, v.minor, v.patch, update_mod.releases_url,
+            }) catch "A newer version is available.",
         .downloading => std.fmt.bufPrintZ(&about_update_buf, "Downloading v{d}.{d}.{d}...", .{
             v.major, v.minor, v.patch,
         }) catch "Downloading the update...",

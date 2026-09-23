@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Ed25519 = std.crypto.sign.Ed25519;
 const Version = @import("update.zig").Version;
+const https = @import("https.zig");
 
 /// `scripts/sign-update.sh` refuses to sign with any other key's partner.
 pub const public_key_hex = "868c456d25be5c40a6a0307dc7b53d1e49e17f37d85baafeb2a15a32b63fb570";
@@ -144,21 +145,11 @@ fn siblingName(buf: []u8, name: []const u8, suffix: []const u8) ![]const u8 {
 }
 
 fn download(gpa: std.mem.Allocator, io: std.Io, url: []const u8, limit: usize) ![]u8 {
-    var client = std.http.Client{ .allocator = gpa, .io = io };
-    defer client.deinit();
-
-    var body: std.Io.Writer.Allocating = .init(gpa);
-    errdefer body.deinit();
-
-    const result = client.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &body.writer,
-        .extra_headers = &.{.{ .name = "user-agent", .value = "zimacs" }},
-    }) catch return error.Unavailable;
-
-    if (result.status != .ok) return error.Unavailable;
-    if (body.written().len == 0 or body.written().len > limit) return error.Unavailable;
-    return body.toOwnedSlice() catch error.Unavailable;
+    const response = try https.get(gpa, io, url, &.{.{ .name = "user-agent", .value = "zimacs" }}, limit);
+    errdefer gpa.free(response.body);
+    if (response.status != .ok) return error.DownloadRefused;
+    if (response.body.len == 0) return error.EmptyDownload;
+    return response.body;
 }
 
 // ---------------------------------------------------------------- tests
