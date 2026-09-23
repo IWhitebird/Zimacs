@@ -10,7 +10,9 @@ bottom, or Ctrl+G and ask for line 200000. It is fetched from a CDN in the
 background, so give it a moment on a slow connection.
 
 Worth trying
-  Ctrl+F            find, then F3 and Shift+F3 for next and previous
+  Ctrl+F            find, then Enter and Shift+Enter for next and previous
+  Ctrl+H            find and replace, Ctrl+Alt+Enter to replace them all
+  Alt+Z             word wrap on and off
   Ctrl+G            go to a line number
   Ctrl+D            duplicate this line
   Ctrl+Shift+K      delete this line

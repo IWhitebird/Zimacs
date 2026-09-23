@@ -12,6 +12,8 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/history.zig", .raylib = false },
     .{ .path = "src/core/buffer.zig", .raylib = false },
     .{ .path = "src/core/session.zig", .raylib = false },
+    .{ .path = "src/core/search.zig", .raylib = false },
+    .{ .path = "src/core/field.zig", .raylib = false },
     .{ .path = "src/core/config.zig", .raylib = false },
     .{ .path = "src/core/prompt.zig", .raylib = false },
     .{ .path = "src/core/recent.zig", .raylib = false },
@@ -21,6 +23,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/menu.zig", .raylib = true },
     .{ .path = "src/core/titlebar.zig", .raylib = true },
     .{ .path = "src/core/native.zig", .raylib = true },
+    .{ .path = "src/core/find.zig", .raylib = true },
     .{ .path = "src/core/theme.zig", .raylib = true },
     .{ .path = "src/core/layout.zig", .raylib = true },
 };

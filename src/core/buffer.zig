@@ -47,6 +47,8 @@ pub const BufferView = struct {
     name: []const u8,
     /// The point in the undo history that matches what is on disk.
     saved_at: usize = 0,
+    /// Bumped by every change to the text, so derived results know to refresh.
+    version: u64 = 0,
 
     const Self = @This();
 
@@ -75,6 +77,7 @@ pub const BufferView = struct {
         const before = v.cursor.offset;
         if (len > 0) try v.tree.delete(offset, len);
         if (text.len > 0) try v.tree.insert(offset, text);
+        v.version += 1;
 
         v.cursor.offset = offset + @as(u32, @intCast(text.len));
         v.cursor.afterEdit(&v.tree);
@@ -293,6 +296,7 @@ pub const BufferView = struct {
         const e = v.history.undo() orelse return;
         if (e.inserted.len > 0) try v.tree.delete(e.offset, @intCast(e.inserted.len));
         if (e.removed.len > 0) try v.tree.insert(e.offset, e.removed);
+        v.version += 1;
         v.cursor.offset = e.cursor_before;
         v.cursor.afterEdit(&v.tree);
     }
@@ -301,6 +305,7 @@ pub const BufferView = struct {
         const e = v.history.redo() orelse return;
         if (e.removed.len > 0) try v.tree.delete(e.offset, @intCast(e.removed.len));
         if (e.inserted.len > 0) try v.tree.insert(e.offset, e.inserted);
+        v.version += 1;
         v.cursor.offset = e.cursor_after;
         v.cursor.afterEdit(&v.tree);
     }

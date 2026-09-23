@@ -22,13 +22,15 @@ interface. No GTK, no Electron, no toolkit to install.
 - **Undo and redo**, coalescing runs of typing so one undo removes a word
 - **Selection** by keyboard, mouse drag, double-click for a word, triple-click
   for a line
-- **Find** with wrap-around (`Ctrl+F`, `F3`)
+- **Find and replace** in a bar with match case and whole word options, a
+  live match count, and Replace All as a single undo step (`Ctrl+F`, `Ctrl+H`,
+  `F3`)
 - **File browser** drawn in the editor, so it looks and works the same on every
   platform
 - **Session restore**: reopens exactly as you left it, Notepad++ style: tabs
   with unsaved work, cursors, selections, scroll, zoom and window placement.
   Saved every few seconds too, so a crash or shutdown loses almost nothing
-- **Line wrapping**, optional
+- **Word wrap**, toggled from the View menu or `Alt+Z`
 - **UTF-8** throughout, including monochrome emoji
 - **Configurable** colours, font size, caret style, tab width
 

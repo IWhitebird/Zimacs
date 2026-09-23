@@ -37,6 +37,7 @@ pub const Recent = recent_mod.Recent;
 pub const Browser = @import("core/browser.zig").Browser;
 pub const Update = update_mod.Update;
 pub const Window = @import("core/window.zig").Window;
+pub const Find = @import("core/find.zig").Find;
 
 const leak_checks = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -80,6 +81,7 @@ pub var recent = Recent{};
 pub var menu = Menu{};
 pub var browser = Browser{};
 pub var update = Update{};
+pub var find = Find{};
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
@@ -101,7 +103,8 @@ pub fn run(start: Start) !void {
     defer recent.deinit();
     browser.gpa = gpa;
     defer browser.deinit();
-    defer commands.deinit();
+    find.gpa = gpa;
+    defer find.deinit();
     defer if (config_path) |p| gpa.free(p);
 
     loadConfig(start);

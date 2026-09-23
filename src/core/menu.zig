@@ -25,6 +25,9 @@ pub const Action = enum {
     paste,
     select_all,
     find,
+    replace,
+    find_next,
+    find_previous,
 
     delete_line,
     duplicate_line,
@@ -36,6 +39,7 @@ pub const Action = enum {
     outdent,
     goto_line,
 
+    toggle_wrap,
     zoom_in,
     zoom_out,
     zoom_reset,
@@ -49,6 +53,8 @@ pub const Entry = struct {
     label: [:0]const u8,
     shortcut: [:0]const u8 = "",
     action: Action,
+    /// Shows a tick when the setting it toggles is on.
+    checkable: bool = false,
 };
 
 pub const Group = struct {
@@ -73,6 +79,9 @@ pub const bar = [_]Group{
         .{ .label = "Paste", .shortcut = "Ctrl+V", .action = .paste },
         .{ .label = "Select All", .shortcut = "Ctrl+A", .action = .select_all },
         .{ .label = "Find...", .shortcut = "Ctrl+F", .action = .find },
+        .{ .label = "Replace...", .shortcut = "Ctrl+H", .action = .replace },
+        .{ .label = "Find Next", .shortcut = "F3", .action = .find_next },
+        .{ .label = "Find Previous", .shortcut = "Shift+F3", .action = .find_previous },
         .{ .label = "Go to Line...", .shortcut = "Ctrl+G", .action = .goto_line },
         .{ .label = "Delete Line", .shortcut = "Ctrl+Shift+K", .action = .delete_line },
         .{ .label = "Duplicate Line", .shortcut = "Ctrl+D", .action = .duplicate_line },
@@ -84,6 +93,7 @@ pub const bar = [_]Group{
         .{ .label = "Outdent", .shortcut = "Shift+Tab", .action = .outdent },
     } },
     .{ .title = "View", .entries = &.{
+        .{ .label = "Word Wrap", .shortcut = "Alt+Z", .action = .toggle_wrap, .checkable = true },
         .{ .label = "Zoom In", .shortcut = "Ctrl+=", .action = .zoom_in },
         .{ .label = "Zoom Out", .shortcut = "Ctrl+-", .action = .zoom_out },
         .{ .label = "Reset Zoom", .shortcut = "Ctrl+0", .action = .zoom_reset },
@@ -137,11 +147,19 @@ pub fn titleAt(point: pen.Vector2, l: Layout, font: Font) ?usize {
     return null;
 }
 
+/// Room for the tick, reserved only in menus that have a checkable entry.
+pub fn checkWidth(index: usize, font: Font) f32 {
+    for (bar[index].entries) |entry| {
+        if (entry.checkable) return font.metrics.width * 2;
+    }
+    return 0;
+}
+
 pub fn dropdownRect(index: usize, l: Layout, font: Font) pen.Rectangle {
     const anchor = titleRect(index, l, font);
     var widest: f32 = 0;
     for (bar[index].entries) |entry| {
-        var width = font.widthOf(entry.label) + layout.padding * 2;
+        var width = checkWidth(index, font) + font.widthOf(entry.label) + layout.padding * 2;
         if (entry.shortcut.len > 0) width += font.widthOf(entry.shortcut) + shortcut_gap;
         widest = @max(widest, width);
     }
@@ -275,4 +293,13 @@ test "capturing follows the open state" {
     try testing.expect(!m.capturing());
     m.showing_about = true;
     try testing.expect(m.capturing());
+}
+
+test "only a menu with a checkable entry reserves room for the tick" {
+    const font = Font{ .metrics = .{ .width = 8, .height = 16 } };
+    for (bar, 0..) |group, i| {
+        var any = false;
+        for (group.entries) |entry| any = any or entry.checkable;
+        try testing.expectEqual(any, checkWidth(i, font) > 0);
+    }
 }

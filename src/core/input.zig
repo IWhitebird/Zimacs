@@ -34,6 +34,9 @@ const wrap_mod = @import("wrap.zig");
 const commands = @import("commands.zig");
 const menu_mod = @import("menu.zig");
 const titlebar = @import("titlebar.zig");
+const find_mod = @import("find.zig");
+const TextField = @import("field.zig").TextField;
+const BufferView = @import("buffer.zig").BufferView;
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
@@ -72,6 +75,7 @@ pub const Input = struct {
         _ = ctx;
         // First, so prompts and panels never block moving or closing.
         if (caption.handle()) return;
+        if (try FindBar.handle()) return;
         if (app.prompt.active) {
             try runPrompt();
             return;
@@ -151,6 +155,130 @@ const Caption = struct {
         if (shape == c.cursor) return;
         c.cursor = shape;
         pen.setMouseCursor(shape);
+    }
+};
+
+/// Keyboard and pointer for the find and replace bar.
+const FindBar = struct {
+    /// True when it has taken this frame's input.
+    fn handle() !bool {
+        const f = &app.find;
+        if (!f.open) return false;
+        if (app.prompt.active or app.menu.capturing()) {
+            f.focus = null;
+            return false;
+        }
+        const view = app.buffer.current() orelse {
+            f.close();
+            return false;
+        };
+
+        if (pen.isMouseButtonPressed(.left)) {
+            const g = find_mod.geometry(editor.currentLayout(), app.font, f.replacing);
+            const point = pen.getMousePosition();
+            if (find_mod.controlAt(point, g, f.replacing)) |c| {
+                try press(c, view, g, point);
+                return true;
+            }
+            if (find_mod.inPanel(point, g)) return true;
+            // The document takes the keyboard back; the bar stays open.
+            f.focus = null;
+            return false;
+        }
+        if (pressed(.escape)) {
+            f.close();
+            return true;
+        }
+        const field = f.focused() orelse return false;
+        try edit(field, view);
+        try windowShortcuts();
+        try repeatSearch();
+        return true;
+    }
+
+    fn press(c: find_mod.Control, view: *BufferView, g: find_mod.Geometry, point: pen.Vector2) !void {
+        const f = &app.find;
+        switch (c) {
+            .find_field, .replace_field => {
+                const which: find_mod.Field = if (c == .find_field) .find else .replace;
+                f.focus = which;
+                placeCaret(f.field(which), g.rect(c), point);
+            },
+            .match_case, .whole_word => {
+                f.toggle(c);
+                try f.searchFromOrigin(view);
+            },
+            .expand => f.toggle(.expand),
+            .previous => try f.step(view, .backward),
+            .next => try f.step(view, .forward),
+            .close => f.close(),
+            .replace_one => try f.replaceOne(view),
+            .replace_all => _ = try f.replaceAll(view),
+        }
+    }
+
+    fn edit(field: *TextField, view: *BufferView) !void {
+        const f = &app.find;
+        const gpa = app.gpa;
+        const ctrl = ctrlDown();
+        const shift = shiftDown();
+        const alt = altDown();
+        const before = std.hash.Wyhash.hash(0, f.query.value());
+
+        while (true) {
+            const code = pen.getCharPressed();
+            if (code <= 0 or code > 0x10FFFF) break;
+            // Alt+letter still produces the letter on some platforms.
+            if (alt or ctrl) continue;
+            var utf8: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
+            try field.insert(gpa, utf8[0..n]);
+        }
+
+        if (pressed(.backspace)) if (ctrl) field.deleteWordBefore() else field.backspace();
+        if (pressed(.delete)) if (ctrl) field.deleteWordAfter() else field.delete();
+        if (pressed(.left)) if (ctrl) field.wordLeft(shift) else field.left(shift);
+        if (pressed(.right)) if (ctrl) field.wordRight(shift) else field.right(shift);
+        if (pressed(.home)) field.home(shift);
+        if (pressed(.end)) field.end(shift);
+
+        if (ctrl and pressed(.a)) field.selectAll();
+        if (ctrl and (pressed(.c) or pressed(.x))) if (field.selection()) |sel| {
+            const copied = try gpa.dupeZ(u8, field.value()[sel.start..sel.end]);
+            defer gpa.free(copied);
+            pen.setClipboardText(copied);
+            if (pressed(.x)) field.backspace();
+        };
+        if (ctrl and pressed(.v)) try field.insert(gpa, pen.getClipboardText());
+
+        if (alt and pressed(.c)) f.toggle(.match_case);
+        if (alt and pressed(.w)) f.toggle(.whole_word);
+        if (alt and (pressed(.c) or pressed(.w))) try f.searchFromOrigin(view);
+
+        if (pressed(.tab) and !ctrl and f.replacing) {
+            f.focus = if (f.focus == .find) .replace else .find;
+        }
+        if (pressed(.enter) or pressed(.kp_enter)) {
+            if (ctrl and alt) {
+                _ = try f.replaceAll(view);
+            } else if (f.focus == .replace) {
+                try f.replaceOne(view);
+            } else {
+                try f.step(view, if (shift) .backward else .forward);
+            }
+        }
+
+        if (std.hash.Wyhash.hash(0, f.query.value()) != before) try f.searchFromOrigin(view);
+    }
+
+    fn placeCaret(field: *TextField, rect: pen.Rectangle, point: pen.Vector2) void {
+        const value = field.value();
+        const visible = find_mod.fieldColumns(rect, app.font);
+        const first = find_mod.fieldScroll(text_mod.columnOf(value, field.caret, 1), visible);
+        const offset = (point.x - rect.x - layout_mod.padding) / app.font.metrics.width;
+        const column: u32 = @intCast(first + @as(usize, @intFromFloat(@max(@round(offset), 0))));
+        field.anchor = null;
+        field.caret = text_mod.offsetOf(value, column, 1);
     }
 };
 
@@ -286,10 +414,15 @@ fn typeText() !void {
 // ----------------------------------------------------------- shortcuts
 
 fn shortcuts() !void {
-    // Alt is only used for moving lines about.
+    try windowShortcuts();
+    try editingShortcuts();
+}
+
+/// Shortcuts that act on the editor as a whole, so they still work while a
+/// find field has the keyboard.
+fn windowShortcuts() !void {
     if (altDown() and !ctrlDown()) {
-        if (pressed(.up)) try commands.run(.move_line_up);
-        if (pressed(.down)) try commands.run(.move_line_down);
+        if (pressed(.z)) try commands.run(.toggle_wrap);
         return;
     }
     if (!ctrlDown()) return;
@@ -310,7 +443,22 @@ fn shortcuts() !void {
     if (pressed(.o)) try commands.run(.open_file);
     if (pressed(.r)) try commands.run(.open_recent);
     if (pressed(.f)) try commands.run(.find);
+    if (pressed(.h)) try commands.run(.replace);
     if (pressed(.g)) try commands.run(.goto_line);
+    if (pressed(.s)) try commands.run(if (shift) .save_as else .save);
+    if (pressed(.comma)) try commands.run(.open_config);
+}
+
+/// Shortcuts that edit the document.
+fn editingShortcuts() !void {
+    if (altDown() and !ctrlDown()) {
+        if (pressed(.up)) try commands.run(.move_line_up);
+        if (pressed(.down)) try commands.run(.move_line_down);
+        return;
+    }
+    if (!ctrlDown()) return;
+    const shift = shiftDown();
+
     if (pressed(.a)) try commands.run(.select_all);
     if (pressed(.l)) if (app.buffer.current()) |v| v.cursor.selectLine(&v.tree);
     if (pressed(.c)) try commands.run(.copy);
@@ -318,8 +466,6 @@ fn shortcuts() !void {
     if (pressed(.v)) try commands.run(.paste);
     if (pressed(.y)) try commands.run(.redo);
     if (pressed(.z)) try commands.run(if (shift) .redo else .undo);
-    if (pressed(.s)) try commands.run(if (shift) .save_as else .save);
-    if (pressed(.comma)) try commands.run(.open_config);
 
     if (pressed(.d)) try commands.run(.duplicate_line);
     if (shift and pressed(.k)) try commands.run(.delete_line);
@@ -327,7 +473,6 @@ fn shortcuts() !void {
         try commands.run(if (shift) .open_line_above else .open_line_below);
     }
 
-    // Word-wise deletion. These live here because they need Ctrl held.
     if (pressed(.backspace)) if (app.buffer.current()) |v| try v.deleteWordBefore();
     if (pressed(.delete)) if (app.buffer.current()) |v| try v.deleteWordAfter();
 }
@@ -345,8 +490,7 @@ fn selectTabByNumber() void {
 
 /// F3 and Shift+F3 repeat the last search without reopening the prompt.
 fn repeatSearch() !void {
-    if (!commands.hasQuery()) return;
-    if (pressed(.f3)) try commands.search(if (shiftDown()) .backward else .forward);
+    if (pressed(.f3)) try commands.findStep(if (shiftDown()) .backward else .forward);
 }
 
 // --------------------------------------------------------------- mouse
@@ -602,10 +746,6 @@ fn commitPrompt() !void {
         .save_as => {
             const view = app.buffer.current() orelse return;
             app.buffer.saveAs(view, chosen) catch |err| report("Could not save", err);
-        },
-        .find => {
-            try commands.setQuery(chosen);
-            commands.search(.forward) catch |err| report("Search failed", err);
         },
         .goto_line => commands.gotoLine(chosen),
     }

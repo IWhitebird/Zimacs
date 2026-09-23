@@ -11,15 +11,10 @@ const BufferView = buffer_mod.BufferView;
 const Action = @import("menu.zig").Action;
 const browser_mod = @import("browser.zig");
 const update_mod = @import("update.zig");
+const find_mod = @import("find.zig");
+const config_mod = @import("config.zig");
 const selfupdate = @import("selfupdate.zig");
 const build_info = @import("build_info");
-
-/// The last thing searched for, so the menu and F3 repeat the same thing.
-var query: std.ArrayList(u8) = .empty;
-
-pub fn deinit() void {
-    query.deinit(app.gpa);
-}
 
 pub fn run(action: Action) !void {
     switch (action) {
@@ -57,7 +52,11 @@ pub fn run(action: Action) !void {
         .indent => if (app.buffer.current()) |v| try v.indentLines(app.config.tab_width),
         .outdent => if (app.buffer.current()) |v| try v.outdentLines(app.config.tab_width),
         .goto_line => try app.prompt.begin(.goto_line, ""),
-        .find => try app.prompt.begin(.find, query.items),
+        .find => try openFind(false),
+        .replace => try openFind(true),
+        .find_next => try findStep(.forward),
+        .find_previous => try findStep(.backward),
+        .toggle_wrap => toggleWrap(),
 
         .zoom_in => try app.font.zoomIn(),
         .zoom_out => try app.font.zoomOut(),
@@ -191,32 +190,49 @@ pub fn paste(view: *BufferView) !void {
 
 // --------------------------------------------------------------- search
 
-pub const Direction = enum { forward, backward };
+/// Selections longer than this are not used to seed the search.
+const max_seed = 256;
 
-pub fn setQuery(needle: []const u8) !void {
-    query.clearRetainingCapacity();
-    try query.appendSlice(app.gpa, needle);
+/// Opens the find bar, seeded with the selection when it is a single line.
+pub fn openFind(replacing: bool) !void {
+    app.prompt.cancel();
+    const view = app.buffer.current();
+    var seed: std.ArrayList(u8) = .empty;
+    defer seed.deinit(app.gpa);
+    if (view) |v| if (v.cursor.selection()) |r| if (r.len() <= max_seed) {
+        try v.tree.copy(r.start, r.len(), &seed);
+        if (std.mem.indexOfScalar(u8, seed.items, '\n') != null) seed.clearRetainingCapacity();
+    };
+    try app.find.begin(view, replacing, if (seed.items.len > 0) seed.items else null);
 }
 
-pub fn hasQuery() bool {
-    return query.items.len > 0;
-}
-
-/// Jumps to the next match and selects it, wrapping round the ends.
-pub fn search(direction: Direction) !void {
+/// F3 and Shift+F3: repeats the last search, or opens the bar if there is none.
+pub fn findStep(direction: find_mod.Direction) !void {
     const view = app.buffer.current() orelse return;
-    if (query.items.len == 0) return;
+    if (app.find.query.value().len == 0) return openFind(false);
+    try app.find.step(view, direction);
+}
 
-    const found = switch (direction) {
-        .forward => try view.tree.find(app.gpa, query.items, view.cursor.offset + 1) orelse
-            try view.tree.find(app.gpa, query.items, 0),
-        .backward => try view.tree.findLast(app.gpa, query.items, view.cursor.offset) orelse
-            try view.tree.findLast(app.gpa, query.items, view.tree.len()),
-    } orelse return;
+pub fn toggleWrap() void {
+    app.config.wrap_lines = !app.config.wrap_lines;
+    for (app.buffer.views.items) |v| {
+        v.left_column = 0;
+        v.top_row = 0;
+        // Keeps the caret on screen after the text reflows.
+        v.followed = null;
+    }
+    const io = app.io orelse return;
+    const path = app.config_path orelse return;
+    config_mod.store(io, app.gpa, path, "wrap_lines", if (app.config.wrap_lines) "true" else "false") catch |err|
+        report("Could not save the setting", err);
+}
 
-    view.cursor.moveTo(&view.tree, found, false);
-    view.cursor.anchor = found;
-    view.cursor.offset = found + @as(u32, @intCast(query.items.len));
+/// Whether a checkable menu entry shows its tick.
+pub fn checked(action: Action) bool {
+    return switch (action) {
+        .toggle_wrap => app.config.wrap_lines,
+        else => false,
+    };
 }
 
 /// Jumps to a 1-based line number typed into the prompt.

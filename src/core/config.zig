@@ -30,6 +30,7 @@ pub const Colors = struct {
     scrollbar_hover: u24 = 0x55555F,
     close_hover: u24 = 0xC42B1C,
     close_hover_text: u24 = 0xFFFFFF,
+    find_match: u24 = 0x5C3F12,
 
     /// Sets the field named `key`, if there is one.
     pub fn apply(c: *Colors, key: []const u8, value: []const u8) !void {
@@ -116,6 +117,51 @@ pub const Config = struct {
 
 pub const file_name = "config.ini";
 
+/// Writes one setting into the file at `path`, keeping everything else.
+pub fn store(io: std.Io, gpa: std.mem.Allocator, path: []const u8, key: []const u8, value: []const u8) !void {
+    const old = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => try gpa.dupe(u8, ""),
+        else => return err,
+    };
+    defer gpa.free(old);
+    const new = try withSetting(gpa, old, key, value);
+    defer gpa.free(new);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = new });
+}
+
+/// `text` with the line for `key` set to `value`, or appended if absent.
+/// Comments and every other line are left exactly as they were.
+pub fn withSetting(gpa: std.mem.Allocator, text: []const u8, key: []const u8, value: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+
+    var found = false;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) try out.append(gpa, '\n');
+        first = false;
+        if (!found and isSettingFor(line, key)) {
+            found = true;
+            try out.print(gpa, "{s} = {s}", .{ key, value });
+        } else {
+            try out.appendSlice(gpa, line);
+        }
+    }
+    if (!found) {
+        if (out.items.len > 0 and out.items[out.items.len - 1] != '\n') try out.append(gpa, '\n');
+        try out.print(gpa, "{s} = {s}\n", .{ key, value });
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+fn isSettingFor(line: []const u8, key: []const u8) bool {
+    const trimmed = trim(line);
+    if (trimmed.len == 0 or trimmed[0] == '#') return false;
+    const split = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
+    return eq(trim(trimmed[0..split]), key);
+}
+
 const default_text =
     \\# Zimacs settings. Delete this file to get the defaults back.
     \\
@@ -162,6 +208,7 @@ const default_text =
     \\scrollbar_hover = #55555f
     \\close_hover = #c42b1c
     \\close_hover_text = #ffffff
+    \\find_match = #5c3f12
     \\
 ;
 
@@ -246,4 +293,22 @@ test "booleans" {
     try testing.expectEqual(true, try parseBool("YES"));
     try testing.expectEqual(false, try parseBool("0"));
     try testing.expectError(error.BadValue, parseBool("maybe"));
+}
+
+test "storing a setting changes only its own line" {
+    const before = "# comment\nfont_size = 18\nwrap_lines = false\n";
+    const after = try withSetting(testing.allocator, before, "wrap_lines", "true");
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings("# comment\nfont_size = 18\nwrap_lines = true\n", after);
+}
+
+test "a setting the file lacks is appended, and a commented one is left alone" {
+    const before = "# wrap_lines = false\nfont_size = 18";
+    const after = try withSetting(testing.allocator, before, "wrap_lines", "true");
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings("# wrap_lines = false\nfont_size = 18\nwrap_lines = true\n", after);
+
+    var c = Config{};
+    c.applyText(after);
+    try testing.expect(c.wrap_lines);
 }

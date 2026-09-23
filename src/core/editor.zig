@@ -12,12 +12,17 @@ const layout = @import("layout.zig");
 const text = @import("text.zig");
 const menu = @import("menu.zig");
 const titlebar = @import("titlebar.zig");
+const find_mod = @import("find.zig");
+const search = @import("search.zig");
+const commands = @import("commands.zig");
+const TextField = @import("field.zig").TextField;
 const wrap = @import("wrap.zig");
 const update_mod = @import("update.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const BufferView = @import("buffer.zig").BufferView;
 const Metrics = @import("font.zig").Metrics;
 const Layout = layout.Layout;
+const Range = @import("cursor.zig").Range;
 
 pub const Editor = struct {
     /// One line as stored, then the same line with tabs expanded.
@@ -28,6 +33,8 @@ pub const Editor = struct {
     /// the continuation of a folded line. Filled while drawing the text and
     /// read by the gutter, so the two cannot disagree.
     row_lines: std.ArrayList(?u32) = .empty,
+    /// Search matches on screen this frame.
+    matches: std.ArrayList(search.Match) = .empty,
 
     const Self = @This();
 
@@ -51,6 +58,7 @@ pub const Editor = struct {
         e.shown.deinit(app.gpa);
         e.status.deinit(app.gpa);
         e.row_lines.deinit(app.gpa);
+        e.matches.deinit(app.gpa);
     }
 
     pub fn render(ctx: *anyopaque) !void {
@@ -72,6 +80,7 @@ pub const Editor = struct {
         drawTabs(l);
         try e.drawStatus(view, l, cell);
         try e.drawPrompt(l, cell);
+        try drawFindBar(l, cell);
         // Last, so the dropdown and the About panel sit over everything else.
         drawMenu(l, cell);
         drawFrame(l);
@@ -193,6 +202,7 @@ pub const Editor = struct {
         const shift = if (wrapping) 0 else @as(f32, @floatFromInt(view.left_column)) * cell.width;
 
         e.row_lines.clearRetainingCapacity();
+        try e.collectMatches(view, rows);
 
         var widest: u32 = 1;
         var row: u32 = 0;
@@ -224,8 +234,12 @@ pub const Editor = struct {
                         theme.current.current_line,
                     );
                 }
+                for (e.matches.items) |m| {
+                    const range = Range{ .start = @intCast(m.start), .end = @intCast(m.end) };
+                    e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.find_match);
+                }
                 if (selection) |range| {
-                    e.drawSelection(view, l, cell, line, y, range, columns, from, to);
+                    e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.selection);
                 }
                 if (e.raw.items.len == 0) continue;
 
@@ -247,17 +261,28 @@ pub const Editor = struct {
         try e.drawCaret(view, l, cell);
     }
 
-    fn drawSelection(
+    fn collectMatches(e: *Self, view: *BufferView, rows: u32) !void {
+        e.matches.clearRetainingCapacity();
+        const f = &app.find;
+        if (!f.open or f.query.value().len == 0) return;
+        try f.sync(view);
+        const last = @min(view.top_line + rows, view.tree.lineCount() - 1);
+        try f.matchesIn(view.tree.lineStart(view.top_line), view.tree.lineEnd(last), &e.matches);
+    }
+
+    /// Paints the part of a byte range that falls on one screen row.
+    fn drawSpan(
         e: *Self,
         view: *BufferView,
         l: Layout,
         cell: Metrics,
         line: u32,
         y: f32,
-        range: @import("cursor.zig").Range,
+        range: Range,
         columns: u32,
         from_column: u32,
         to_column: u32,
+        colour: pen.Color,
     ) void {
         const start = view.tree.lineStart(line);
         // Reach one column past the text so a selection spanning several lines
@@ -289,7 +314,7 @@ pub const Editor = struct {
             .y = y,
             .width = @max(@as(f32, @floatFromInt(last - first)) * cell.width, 2),
             .height = cell.height,
-        }, theme.current.selection);
+        }, colour);
     }
 
     fn drawCaret(e: *Self, view: *BufferView, l: Layout, cell: Metrics) !void {
@@ -567,6 +592,154 @@ fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
     }
 }
 
+fn drawTick(rect: pen.Rectangle, ink: pen.Color) void {
+    const size = @round(rect.height * 0.45);
+    const x = rect.x + (rect.width - size) / 2;
+    const y = rect.y + (rect.height - size) / 2;
+    pen.drawLineEx(.{ .x = x, .y = y + size * 0.55 }, .{ .x = x + size * 0.38, .y = y + size }, 1.6, ink);
+    pen.drawLineEx(.{ .x = x + size * 0.38, .y = y + size }, .{ .x = x + size, .y = y }, 1.6, ink);
+}
+
+// ------------------------------------------------------------- find bar
+
+fn drawFindBar(l: Layout, cell: Metrics) !void {
+    const f = &app.find;
+    if (!f.open) return;
+    const view = app.buffer.current() orelse return;
+    try f.sync(view);
+
+    const g = find_mod.geometry(l, app.font, f.replacing);
+    const point = pen.getMousePosition();
+    const t = theme.current;
+
+    pen.drawRectangleRec(g.panel, t.tab_background);
+    pen.drawRectangleLinesEx(g.panel, 1, t.scrollbar);
+
+    drawChevron(g.expand, if (f.replacing) .down else .right, hoverInk(g.expand, point));
+    drawField(&f.query, g.find_field, f.focus == .find, "Find", cell);
+    if (f.replacing) drawField(&f.replacement, g.replace_field, f.focus == .replace, "Replace", cell);
+
+    drawToggle(g.match_case, "Aa", f.options.match_case, point, cell);
+    drawToggle(g.whole_word, "ab", f.options.whole_word, point, cell);
+    // Whole word is conventionally "ab" underlined.
+    const word = g.whole_word;
+    pen.drawRectangleRec(.{ .x = word.x + layout.padding / 2 + cell.width * 0.5, .y = word.y + (word.height + cell.height) / 2, .width = cell.width * 2, .height = 1 }, t.tab_text);
+
+    var count_buf: [32]u8 = undefined;
+    const count: [:0]const u8 = if (f.query.value().len == 0)
+        ""
+    else if (f.total == 0)
+        "No results"
+    else if (f.current(view)) |n|
+        std.fmt.bufPrintZ(&count_buf, "{d} of {d}", .{ n, f.total }) catch ""
+    else
+        std.fmt.bufPrintZ(&count_buf, "{d} found", .{f.total}) catch "";
+    app.font.draw(count, g.count.x + layout.padding / 2, g.count.y + (g.count.height - cell.height) / 2, t.hint);
+
+    drawIconButton(g.previous, point);
+    drawChevron(g.previous, .up, hoverInk(g.previous, point));
+    drawIconButton(g.next, point);
+    drawChevron(g.next, .down, hoverInk(g.next, point));
+    drawIconButton(g.close, point);
+    drawCross(squareIn(g.close), hoverInk(g.close, point));
+
+    if (f.replacing) {
+        drawTextButton(g.replace_one, find_mod.replace_one_label, point, cell);
+        drawTextButton(g.replace_all, find_mod.replace_all_label, point, cell);
+    }
+}
+
+fn drawField(field: *const TextField, rect: pen.Rectangle, focused: bool, placeholder: [:0]const u8, cell: Metrics) void {
+    const t = theme.current;
+    pen.drawRectangleRec(rect, t.background);
+    pen.drawRectangleLinesEx(rect, 1, if (focused) t.caret else t.scrollbar);
+
+    const value = field.value();
+    const y = rect.y + (rect.height - cell.height) / 2;
+    const left = rect.x + layout.padding;
+    if (value.len == 0 and !focused) {
+        app.font.draw(placeholder, left, y, t.hint);
+        return;
+    }
+
+    const visible = find_mod.fieldColumns(rect, app.font);
+    const caret_column = text.columnOf(value, field.caret, 1);
+    const first = find_mod.fieldScroll(caret_column, visible);
+    const shift = @as(f32, @floatFromInt(first)) * cell.width;
+
+    pen.beginScissorMode(@intFromFloat(rect.x + 1), @intFromFloat(rect.y), @intFromFloat(rect.width - 2), @intFromFloat(rect.height));
+    defer pen.endScissorMode();
+
+    if (field.selection()) |sel| {
+        const from: f32 = @floatFromInt(text.columnOf(value, sel.start, 1));
+        const to: f32 = @floatFromInt(text.columnOf(value, sel.end, 1));
+        pen.drawRectangleRec(.{ .x = left + from * cell.width - shift, .y = y, .width = (to - from) * cell.width, .height = cell.height }, t.selection);
+    }
+
+    var buf: [512]u8 = undefined;
+    const shown = std.fmt.bufPrintZ(&buf, "{s}", .{value}) catch return;
+    app.font.draw(shown, left - shift, y, t.text);
+    if (focused) {
+        const x = left + @as(f32, @floatFromInt(caret_column)) * cell.width - shift;
+        pen.drawRectangleRec(.{ .x = x, .y = y, .width = 2, .height = cell.height }, t.caret);
+    }
+}
+
+fn drawToggle(rect: pen.Rectangle, label: [:0]const u8, on: bool, point: pen.Vector2, cell: Metrics) void {
+    const t = theme.current;
+    const inner = shrink(rect, 2);
+    if (on) {
+        pen.drawRectangleRec(inner, t.selection);
+        pen.drawRectangleLinesEx(inner, 1, t.caret);
+    } else if (pen.checkCollisionPointRec(point, rect)) {
+        pen.drawRectangleRec(inner, t.tab_active);
+    }
+    const x = rect.x + (rect.width - app.font.widthOf(label)) / 2;
+    app.font.draw(label, x, rect.y + (rect.height - cell.height) / 2, if (on) t.tab_text_active else t.tab_text);
+}
+
+fn drawIconButton(rect: pen.Rectangle, point: pen.Vector2) void {
+    if (pen.checkCollisionPointRec(point, rect)) pen.drawRectangleRec(shrink(rect, 2), theme.current.tab_active);
+}
+
+fn drawTextButton(rect: pen.Rectangle, label: [:0]const u8, point: pen.Vector2, cell: Metrics) void {
+    const t = theme.current;
+    drawIconButton(rect, point);
+    pen.drawRectangleLinesEx(shrink(rect, 2), 1, t.scrollbar);
+    const x = rect.x + (rect.width - app.font.widthOf(label)) / 2;
+    app.font.draw(label, x, rect.y + (rect.height - cell.height) / 2, hoverInk(rect, point));
+}
+
+const Pointing = enum { up, down, right };
+
+fn drawChevron(rect: pen.Rectangle, pointing: Pointing, ink: pen.Color) void {
+    const size = @round(@min(rect.width, rect.height) * 0.28);
+    const cx = rect.x + rect.width / 2;
+    const cy = rect.y + rect.height / 2;
+    const half = size / 2;
+    const tips: [3]pen.Vector2 = switch (pointing) {
+        .up => .{ .{ .x = cx - size, .y = cy + half }, .{ .x = cx, .y = cy - half }, .{ .x = cx + size, .y = cy + half } },
+        .down => .{ .{ .x = cx - size, .y = cy - half }, .{ .x = cx, .y = cy + half }, .{ .x = cx + size, .y = cy - half } },
+        .right => .{ .{ .x = cx - half, .y = cy - size }, .{ .x = cx + half, .y = cy }, .{ .x = cx - half, .y = cy + size } },
+    };
+    pen.drawLineEx(tips[0], tips[1], 1.5, ink);
+    pen.drawLineEx(tips[1], tips[2], 1.5, ink);
+}
+
+fn hoverInk(rect: pen.Rectangle, point: pen.Vector2) pen.Color {
+    return if (pen.checkCollisionPointRec(point, rect)) theme.current.tab_text_active else theme.current.tab_text;
+}
+
+fn shrink(r: pen.Rectangle, by: f32) pen.Rectangle {
+    return .{ .x = r.x + by, .y = r.y + by, .width = r.width - by * 2, .height = r.height - by * 2 };
+}
+
+/// A square centred in `r`, for glyphs that should not stretch.
+fn squareIn(r: pen.Rectangle) pen.Rectangle {
+    const side = @min(r.width, r.height);
+    return .{ .x = r.x + (r.width - side) / 2, .y = r.y + (r.height - side) / 2, .width = side, .height = side };
+}
+
 /// Fixed-size glyphs, centred, so they do not stretch with the button.
 fn drawCaptionGlyph(b: titlebar.Button, rect: pen.Rectangle, ink: pen.Color) void {
     const size = @round(rect.height * 0.3);
@@ -615,12 +788,12 @@ fn drawDropdown(index: usize, l: Layout, cell: Metrics, point: pen.Vector2) void
         if (hot) pen.drawRectangleRec(rect, theme.current.selection);
 
         const y = rect.y + (rect.height - cell.height) / 2;
-        app.font.draw(
-            entry.label,
-            rect.x + layout.padding,
-            y,
-            if (hot) theme.current.tab_text_active else theme.current.text,
-        );
+        const check = menu.checkWidth(index, app.font);
+        const ink = if (hot) theme.current.tab_text_active else theme.current.text;
+        if (entry.checkable and commands.checked(entry.action)) {
+            drawTick(.{ .x = rect.x + layout.padding, .y = y, .width = check, .height = cell.height }, ink);
+        }
+        app.font.draw(entry.label, rect.x + layout.padding + check, y, ink);
         if (entry.shortcut.len > 0) {
             app.font.draw(
                 entry.shortcut,

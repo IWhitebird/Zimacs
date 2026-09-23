@@ -156,10 +156,7 @@ pub fn signature(b: *const Buffer, extras: Extras) u64 {
     hashValue(&h, @as(u32, @bitCast(extras.zoom)));
     if (extras.window) |w| hashValue(&h, w);
     for (b.views.items) |view| {
-        // Typing coalesces into one history entry, so length is hashed too.
-        hashValue(&h, view.history.applied);
-        hashValue(&h, view.history.edits.items.len);
-        hashValue(&h, view.tree.len());
+        hashValue(&h, view.version);
         hashValue(&h, view.cursor.offset);
         hashValue(&h, view.cursor.anchor orelse std.math.maxInt(u32));
         hashValue(&h, view.top_line);
