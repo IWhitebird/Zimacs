@@ -59,11 +59,7 @@ jobs:
         # instruction in it at all, so this fails the release rather than
         # publishing one that crashes on someone else's machine.
       - name: Check the binary is really baseline
-        run: |
-          count=$(objdump -d --no-show-raw-insn zig-out/bin/Zimacs \
-            | awk '{print $2}' | grep -cE '^v[a-z]' || true)
-          echo "VEX-encoded instructions: $count"
-          test "$count" -eq 0
+        run: scripts/check-baseline.sh zig-out/bin/Zimacs
 
         # The bare binary, signed, is what installed copies download to
         # update themselves. The script refuses to sign with a key that does
@@ -105,11 +101,7 @@ jobs:
       - run: zig build -Dtarget=x86_64-windows -Dcpu=baseline -Doptimize=ReleaseSafe -Dself-update=true
 
       - name: Check the binary is really baseline
-        run: |
-          count=$(objdump -d --no-show-raw-insn zig-out/bin/Zimacs.exe \
-            | awk '{print $2}' | grep -cE '^v[a-z]' || true)
-          echo "VEX-encoded instructions: $count"
-          test "$count" -eq 0
+        run: scripts/check-baseline.sh zig-out/bin/Zimacs.exe
 
       - name: Sign for self-update
         env:
