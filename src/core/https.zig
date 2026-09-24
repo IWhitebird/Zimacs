@@ -14,6 +14,10 @@ const github_roots = [_][]const u8{
 
 const attempts = 3;
 const retry_delay_ms = 1500;
+/// A release download goes through one redirect, to GitHub's asset host.
+const max_redirects = 3;
+/// Replaces Zig's own rather than adding a second, which some servers refuse.
+const user_agent = "zimacs";
 
 pub const Response = struct {
     status: std.http.Status,
@@ -38,16 +42,35 @@ fn getOnce(gpa: std.mem.Allocator, io: std.Io, url: []const u8, headers: []const
     defer client.deinit();
     try trust(&client, gpa, io);
 
-    var body: std.Io.Writer.Allocating = .init(gpa);
-    errdefer body.deinit();
-
-    const result = try client.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &body.writer,
+    // Rather than `fetch`, which reads a body of any size into memory.
+    var req = try client.request(.GET, try std.Uri.parse(url), .{
+        .redirect_behavior = .init(max_redirects),
+        .headers = .{ .user_agent = .{ .override = user_agent } },
         .extra_headers = headers,
     });
-    if (body.written().len > limit) return error.TooLarge;
-    return .{ .status = result.status, .body = try body.toOwnedSlice() };
+    defer req.deinit();
+    try req.sendBodiless();
+
+    var redirect_buffer: [8 * 1024]u8 = undefined;
+    var response = try req.receiveHead(&redirect_buffer);
+
+    const window: []u8 = switch (response.head.content_encoding) {
+        .identity => &.{},
+        .zstd => try gpa.alloc(u8, std.compress.zstd.default_window_len),
+        .deflate, .gzip => try gpa.alloc(u8, std.compress.flate.max_window_len),
+        .compress => return error.UnsupportedCompressionMethod,
+    };
+    defer gpa.free(window);
+    var transfer: [64]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    const reader = response.readerDecompressing(&transfer, &decompress, window);
+
+    const body = reader.allocRemaining(gpa, .limited(limit)) catch |err| switch (err) {
+        error.ReadFailed => return response.bodyErr().?,
+        error.StreamTooLong => return error.TooLarge,
+        else => |e| return e,
+    };
+    return .{ .status = response.head.status, .body = body };
 }
 
 /// Loads the roots up front, which also stops the client rescanning the

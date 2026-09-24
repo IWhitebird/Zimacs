@@ -273,44 +273,6 @@ pub const PieceTree = struct {
         return null;
     }
 
-    /// First occurrence of `needle` at or after `from`, if any.
-    ///
-    /// Searches a window at a time rather than copying the whole document, so
-    /// memory stays bounded no matter how large the file is.
-    pub fn find(t: *const Self, gpa: Allocator, needle: []const u8, from: u32) !?u32 {
-        if (needle.len == 0 or needle.len > t.total_len) return null;
-        const window: u32 = @intCast(@max(64 * 1024, needle.len * 2));
-
-        var chunk: std.ArrayList(u8) = .empty;
-        defer chunk.deinit(gpa);
-
-        var start = @min(from, t.total_len);
-        while (start < t.total_len) {
-            const take = @min(window, t.total_len - start);
-            chunk.clearRetainingCapacity();
-            try t.copy(start, take, &chunk);
-            if (std.mem.indexOf(u8, chunk.items, needle)) |found| {
-                return start + @as(u32, @intCast(found));
-            }
-            if (take < window) return null;
-            // Step back so a match straddling the boundary is not missed.
-            start += window - @as(u32, @intCast(needle.len - 1));
-        }
-        return null;
-    }
-
-    /// Last occurrence of `needle` that starts before `before`, if any.
-    pub fn findLast(t: *const Self, gpa: Allocator, needle: []const u8, before: u32) !?u32 {
-        var best: ?u32 = null;
-        var from: u32 = 0;
-        while (try t.find(gpa, needle, from)) |hit| {
-            if (hit >= before) break;
-            best = hit;
-            from = hit + 1;
-        }
-        return best;
-    }
-
     /// The whole document as a new slice. Caller frees it.
     pub fn allocText(t: *const Self, gpa: Allocator) ![]u8 {
         var out: std.ArrayList(u8) = .empty;
@@ -1133,39 +1095,6 @@ test "byteAt" {
     try testing.expectEqual(@as(?u8, 'b'), tree.byteAt(3));
     try testing.expectEqual(@as(?u8, 'c'), tree.byteAt(4));
     try testing.expectEqual(@as(?u8, null), tree.byteAt(5));
-}
-
-test "find" {
-    const gpa = testing.allocator;
-    var tree = try PieceTree.initFromBytes(gpa, "the quick brown fox");
-    defer tree.deinit();
-
-    try testing.expectEqual(@as(?u32, 0), try tree.find(gpa, "the", 0));
-    try testing.expectEqual(@as(?u32, 4), try tree.find(gpa, "quick", 0));
-    try testing.expectEqual(@as(?u32, 16), try tree.find(gpa, "fox", 0));
-    try testing.expectEqual(@as(?u32, null), try tree.find(gpa, "cat", 0));
-    try testing.expectEqual(@as(?u32, null), try tree.find(gpa, "", 0));
-}
-
-test "find picks up from an offset and crosses piece boundaries" {
-    const gpa = testing.allocator;
-    var tree = try PieceTree.initFromBytes(gpa, "aaXXaa");
-    defer tree.deinit();
-    // Fragment the tree so the match spans two pieces.
-    try tree.insert(2, "YY");
-    // Document is now "aaYYXXaa".
-    try testing.expectEqual(@as(?u32, 2), try tree.find(gpa, "YYXX", 0));
-    try testing.expectEqual(@as(?u32, 6), try tree.find(gpa, "aa", 1));
-}
-
-test "findLast walks back" {
-    const gpa = testing.allocator;
-    var tree = try PieceTree.initFromBytes(gpa, "ab ab ab");
-    defer tree.deinit();
-
-    try testing.expectEqual(@as(?u32, 6), try tree.findLast(gpa, "ab", 8));
-    try testing.expectEqual(@as(?u32, 3), try tree.findLast(gpa, "ab", 6));
-    try testing.expectEqual(@as(?u32, null), try tree.findLast(gpa, "ab", 0));
 }
 
 test "many small inserts stay consistent" {

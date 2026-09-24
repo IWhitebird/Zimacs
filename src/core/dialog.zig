@@ -5,6 +5,7 @@
 const std = @import("std");
 const pen = @import("raylib");
 const layout = @import("layout.zig");
+const text = @import("text.zig");
 const Font = @import("font.zig").Font;
 const BufferView = @import("buffer.zig").BufferView;
 const Layout = layout.Layout;
@@ -48,16 +49,16 @@ pub fn label(a: Answer) [:0]const u8 {
     };
 }
 
-/// Names longer than this are shortened in the title.
+/// Names wider than this many columns are shortened in the title.
 const max_name = 48;
 
 pub fn title(buf: []u8, q: Question) [:0]const u8 {
-    const name = q.view().name;
-    const shown = if (name.len > max_name) name[0..max_name] else name;
-    const ellipsis = if (name.len > max_name) "..." else "";
+    // Cut from the start, whole characters only, so the extension shows.
+    var name_buf: [title_capacity]u8 = undefined;
+    const name = text.fitStart(&name_buf, q.view().name, max_name);
     return switch (q) {
-        .close_unsaved => std.fmt.bufPrintZ(buf, "Save changes to {s}{s}?", .{ shown, ellipsis }),
-        .changed_on_disk => std.fmt.bufPrintZ(buf, "{s}{s} changed on disk.", .{ shown, ellipsis }),
+        .close_unsaved => std.fmt.bufPrintZ(buf, "Save changes to {s}?", .{name}),
+        .changed_on_disk => std.fmt.bufPrintZ(buf, "{s} changed on disk.", .{name}),
     } catch "";
 }
 
@@ -228,6 +229,6 @@ test "a very long file name is shortened in the title" {
     const view = try b.newFilled("x" ** 200, "");
     var buf: [title_capacity]u8 = undefined;
     const t = title(&buf, .{ .close_unsaved = view });
-    try testing.expect(std.mem.endsWith(u8, t, "...?"));
+    try testing.expect(std.mem.startsWith(u8, t, "Save changes to ..."));
     try testing.expect(t.len < title_capacity);
 }

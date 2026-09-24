@@ -47,11 +47,6 @@ pub fn build(b: *std.Build) void {
     const raygui = raylib_dep.module("raygui");
     const raylib_lib = raylib_dep.artifact("raylib");
 
-    const font_file = b.path("assets/font/JetBrainsMono-Medium.ttf");
-    const emoji_file = b.path("assets/font/NotoEmoji-Subset.ttf");
-    const icon_file = b.path("assets/logo/zimacs-64.png");
-    const welcome_file = b.path("assets/web/welcome.txt");
-
     // Version comes from build.zig.zon, so there is only one place to bump it.
     const build_info = b.addOptions();
     build_info.addOption([]const u8, "version", zon.version);
@@ -64,16 +59,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe_module.addImport("raylib", raylib);
-    exe_module.addImport("raygui", raygui);
-    // An import so @embedFile can reach a file outside src/.
-    exe_module.addAnonymousImport("font_data", .{ .root_source_file = font_file });
-    exe_module.addAnonymousImport("emoji_data", .{ .root_source_file = emoji_file });
-    exe_module.addAnonymousImport("icon_data", .{ .root_source_file = icon_file });
-    exe_module.addAnonymousImport("welcome_data", .{ .root_source_file = welcome_file });
-    addRootCerts(b, exe_module);
-    exe_module.addOptions("build_info", build_info);
-    exe_module.linkLibrary(raylib_lib);
+    const app = App{ .raylib = raylib, .raygui = raygui, .raylib_lib = raylib_lib, .build_info = build_info };
+    app.addTo(b, exe_module);
 
     // Gives Zimacs.exe its icon in Explorer and the taskbar. Only Windows
     // has the concept, so it is skipped everywhere else.
@@ -128,21 +115,32 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        addRootCerts(b, module);
-        if (file.raylib) {
-            module.addImport("raylib", raylib);
-            module.addImport("raygui", raygui);
-            module.addAnonymousImport("font_data", .{ .root_source_file = font_file });
-            module.addAnonymousImport("emoji_data", .{ .root_source_file = emoji_file });
-            module.addAnonymousImport("icon_data", .{ .root_source_file = icon_file });
-            module.addAnonymousImport("welcome_data", .{ .root_source_file = welcome_file });
-            module.addOptions("build_info", build_info);
-            module.linkLibrary(raylib_lib);
-        }
+        if (file.raylib) app.addTo(b, module) else addRootCerts(b, module);
         const tests = b.addTest(.{ .root_module = module });
         test_step.dependOn(&b.addRunArtifact(tests).step);
     }
 }
+
+/// Everything the editor's own code imports.
+const App = struct {
+    raylib: *std.Build.Module,
+    raygui: *std.Build.Module,
+    raylib_lib: *std.Build.Step.Compile,
+    build_info: *std.Build.Step.Options,
+
+    fn addTo(app: App, b: *std.Build, module: *std.Build.Module) void {
+        module.addImport("raylib", app.raylib);
+        module.addImport("raygui", app.raygui);
+        module.linkLibrary(app.raylib_lib);
+        module.addOptions("build_info", app.build_info);
+        // Imports, so @embedFile can reach files outside src/.
+        module.addAnonymousImport("font_data", .{ .root_source_file = b.path("assets/font/JetBrainsMono-Medium.ttf") });
+        module.addAnonymousImport("emoji_data", .{ .root_source_file = b.path("assets/font/NotoEmoji-Subset.ttf") });
+        module.addAnonymousImport("icon_data", .{ .root_source_file = b.path("assets/logo/zimacs-64.png") });
+        module.addAnonymousImport("welcome_data", .{ .root_source_file = b.path("assets/web/welcome.txt") });
+        addRootCerts(b, module);
+    }
+};
 
 /// The certificates `src/core/https.zig` trusts on top of the system's.
 fn addRootCerts(b: *std.Build, module: *std.Build.Module) void {

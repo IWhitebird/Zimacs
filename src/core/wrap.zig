@@ -27,14 +27,6 @@ pub fn rowStart(row: u32, width: u32) u32 {
     return row * width;
 }
 
-/// Total rows the lines `[0, count)` occupy, given each one's column count.
-/// Used to size the scrollbar when wrapping is on.
-pub fn totalRows(columns: []const u32, width: u32) u32 {
-    var rows: u32 = 0;
-    for (columns) |c| rows += rowsFor(c, width);
-    return rows;
-}
-
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
@@ -92,9 +84,4 @@ test "every column lands on a row that exists" {
 test "a zero width does not divide by zero" {
     try testing.expectEqual(@as(u32, 1), rowsFor(50, 0));
     try testing.expectEqual(@as(u32, 0), place(50, 0).row);
-}
-
-test "totalRows adds the lines up" {
-    const columns = [_]u32{ 0, 10, 80, 81 };
-    try testing.expectEqual(@as(u32, 5), totalRows(&columns, 80));
 }

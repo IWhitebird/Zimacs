@@ -89,6 +89,8 @@ pub const Update = struct {
     /// Why the last check or install failed, for the About box. Written
     /// before the state that publishes it.
     problem: ?[:0]const u8 = null,
+    /// The problem is one that retrying soon will not fix.
+    lasting: bool = false,
     announce: bool = true,
     log: Log = .{},
 
@@ -108,6 +110,7 @@ pub const Update = struct {
 
         u.announce = options.announce;
         u.problem = null;
+        u.lasting = false;
         u.state.store(.checking, .release);
         const thread = std.Thread.spawn(.{}, work, .{ u, gpa, io, current, options }) catch {
             u.state.store(.failed, .release);
@@ -147,6 +150,7 @@ pub const Update = struct {
             });
             // Still worth telling the user it exists.
             u.problem = @errorName(err);
+            u.lasting = selfupdate.isPermanent(err);
             u.state.store(.available, .release);
             return;
         };
@@ -167,7 +171,8 @@ pub const Update = struct {
 };
 
 /// When the background check runs: at startup, again soon after a failure
-/// and less often each time, and every few hours while Zimacs stays open.
+/// and less often each time, and every few hours while Zimacs stays open,
+/// which is also how long a failure that retrying cannot fix waits.
 pub const Schedule = struct {
     next: f64 = 0,
     failures: usize = 0,
@@ -185,7 +190,7 @@ pub const Schedule = struct {
         }
         if (s.started) {
             s.started = false;
-            if (u.failed()) {
+            if (u.failed() and !u.lasting) {
                 s.next = now + retry_seconds[@min(s.failures, retry_seconds.len - 1)];
                 s.failures += 1;
             } else {
@@ -202,7 +207,6 @@ pub const Schedule = struct {
 fn fetchLatest(gpa: std.mem.Allocator, io: std.Io) !Version {
     const response = try https.get(gpa, io, api_url, &.{
         .{ .name = "accept", .value = "application/vnd.github+json" },
-        .{ .name = "user-agent", .value = "zimacs" },
     }, max_response);
     defer gpa.free(response.body);
 
@@ -307,4 +311,16 @@ test "an update that did not install counts as a failure, one that did stops the
     u.problem = null;
     u.state.store(.installed, .release);
     try testing.expect(!s.due(1_000_000, &u));
+}
+
+test "a failure retrying cannot fix waits for the next regular check" {
+    var u = Update{};
+    var s = Schedule{};
+    try testing.expect(s.due(0, &u));
+    u.problem = "AccessDenied";
+    u.lasting = true;
+    u.state.store(.available, .release);
+    try testing.expect(!s.due(1, &u));
+    try testing.expect(!s.due(1 + 60 * 60, &u));
+    try testing.expect(s.due(1 + 6 * 60 * 60, &u));
 }

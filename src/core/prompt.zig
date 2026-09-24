@@ -4,6 +4,7 @@
 //! instead - the same idea as an Emacs minibuffer.
 
 const std = @import("std");
+const text_mod = @import("text.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Kind = enum { open, save_as, browse, save_into, goto_line };
@@ -30,6 +31,12 @@ pub const Prompt = struct {
     matches: std.ArrayList(usize) = .empty,
     /// Which match is highlighted.
     option: usize = 0,
+    /// The highlight was moved there with the arrows or the mouse, rather
+    /// than resting on the first match.
+    picked: bool = false,
+
+    /// How many matches the list shows at once.
+    pub const max_shown: usize = 8;
 
     const Self = @This();
 
@@ -43,6 +50,7 @@ pub const Prompt = struct {
         p.kind = kind;
         p.options = &.{};
         p.option = 0;
+        p.picked = false;
         p.matches.clearRetainingCapacity();
         p.input.clearRetainingCapacity();
         try p.input.appendSlice(p.gpa, initial);
@@ -62,23 +70,46 @@ pub const Prompt = struct {
             if (contains(option, p.input.items)) try p.matches.append(p.gpa, i);
         }
         p.option = 0;
+        p.picked = false;
     }
 
-    /// Moves the highlight, wrapping at both ends.
+    /// How many matches the list is showing.
+    pub fn shown(p: Self) usize {
+        return @min(p.matches.items.len, max_shown);
+    }
+
+    /// Moves the highlight through the shown matches, wrapping at both ends.
     pub fn cycle(p: *Self, delta: i32) void {
-        if (p.matches.items.len == 0) return;
-        const count: i32 = @intCast(p.matches.items.len);
+        if (p.shown() == 0) return;
+        const count: i32 = @intCast(p.shown());
         p.option = @intCast(@mod(@as(i32, @intCast(p.option)) + delta, count));
+        p.picked = true;
     }
 
-    /// The suggestion currently highlighted, if the list has any.
+    /// Highlights a shown row, as a click does.
+    pub fn pick(p: *Self, row: usize) void {
+        if (row >= p.shown()) return;
+        p.option = row;
+        p.picked = true;
+    }
+
+    /// Which shown row is highlighted. Saving highlights nothing until a row
+    /// is picked, because a match only contains the typed name: taking it
+    /// would save over a different file.
+    pub fn highlighted(p: Self) ?usize {
+        if (p.option >= p.shown()) return null;
+        if (p.kind == .save_into and !p.picked) return null;
+        return p.option;
+    }
+
+    /// The suggestion currently highlighted, if any.
     pub fn choice(p: Self) ?[]const u8 {
-        if (p.option >= p.matches.items.len) return null;
-        return p.options[p.matches.items[p.option]];
+        const row = p.highlighted() orelse return null;
+        return p.options[p.matches.items[row]];
     }
 
     /// What picking right now would use: the highlighted suggestion, or the
-    /// typed text when nothing matches.
+    /// typed text when nothing is highlighted.
     ///
     /// The result borrows the prompt's own storage, so it stops being valid
     /// the moment the prompt is closed or typed into. Use `takeResult` unless
@@ -121,7 +152,7 @@ pub const Prompt = struct {
         if (p.input.items.len == 0) return;
         var n: usize = 1;
         while (n < p.input.items.len and
-            p.input.items[p.input.items.len - n] & 0b1100_0000 == 0b1000_0000) : (n += 1)
+            text_mod.isTrailing(p.input.items[p.input.items.len - n])) : (n += 1)
         {}
         p.input.shrinkRetainingCapacity(p.input.items.len - n);
     }
@@ -221,4 +252,31 @@ test "backspace removes a whole multi-byte character" {
 
     p.backspace();
     try std.testing.expectEqualSlices(u8, "e", p.text());
+}
+
+test "saving takes the typed name, not a file that merely contains it" {
+    var p = Prompt{ .gpa = std.testing.allocator };
+    defer p.deinit();
+
+    const options = [_][]const u8{ "changelog.txt", "notes.txt" };
+    try p.beginWith(.save_into, &options);
+    try p.append("log.txt");
+    try std.testing.expectEqual(@as(usize, 1), p.matches.items.len);
+    try std.testing.expectEqualSlices(u8, "log.txt", p.result());
+
+    p.cycle(1);
+    try std.testing.expectEqualSlices(u8, "changelog.txt", p.result());
+}
+
+test "the highlight stays on the rows that are shown" {
+    var p = Prompt{ .gpa = std.testing.allocator };
+    defer p.deinit();
+
+    var options: [Prompt.max_shown + 4][]const u8 = undefined;
+    for (&options) |*o| o.* = "same";
+    try p.beginWith(.open, &options);
+    p.cycle(-1);
+    try std.testing.expectEqual(@as(?usize, Prompt.max_shown - 1), p.highlighted());
+    p.cycle(1);
+    try std.testing.expectEqual(@as(?usize, 0), p.highlighted());
 }

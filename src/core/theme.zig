@@ -37,28 +37,19 @@ pub fn apply(colors: Colors) void {
 }
 
 fn build(c: Colors) Theme {
-    return .{
-        .background = rgb(c.background),
-        .text = rgb(c.text),
-        .current_line = rgb(c.current_line),
-        .selection = rgb(c.selection),
-        .gutter_text = rgb(c.gutter_text),
-        .gutter_text_active = rgb(c.gutter_text_active),
-        .status_background = rgb(c.status_background),
-        .status_text = rgb(c.status_text),
-        .tab_background = rgb(c.tab_background),
-        .tab_active = rgb(c.tab_active),
-        .tab_text = rgb(c.tab_text),
-        .tab_text_active = rgb(c.tab_text_active),
-        .caret = rgb(c.caret),
-        .hint = rgb(c.hint),
-        .scrollbar = rgb(c.scrollbar),
-        .scrollbar_hover = rgb(c.scrollbar_hover),
-        .close_hover = rgb(c.close_hover),
-        .close_hover_text = rgb(c.close_hover_text),
-        .find_match = rgb(c.find_match),
-        .warning = rgb(c.warning),
-    };
+    comptime {
+        for (@typeInfo(Colors).@"struct".fields) |field| {
+            if (!@hasField(Theme, field.name)) @compileError("Theme has no colour " ++ field.name);
+        }
+        if (@typeInfo(Theme).@"struct".fields.len != @typeInfo(Colors).@"struct".fields.len) {
+            @compileError("Theme and Colors list different colours");
+        }
+    }
+    var t: Theme = undefined;
+    inline for (@typeInfo(Colors).@"struct".fields) |field| {
+        @field(t, field.name) = rgb(@field(c, field.name));
+    }
+    return t;
 }
 
 fn rgb(value: u24) pen.Color {

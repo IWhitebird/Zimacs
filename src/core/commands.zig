@@ -27,7 +27,7 @@ pub fn run(action: Action) !void {
         .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
-        .about => {},
+        .about => app.menu.showing_about = true,
 
         .save => try save(),
         .save_as => try browseToSave(),
@@ -61,9 +61,9 @@ pub fn run(action: Action) !void {
         .find_previous => try findStep(.backward),
         .toggle_wrap => toggleWrap(),
 
-        .zoom_in => try app.font.zoomIn(),
-        .zoom_out => try app.font.zoomOut(),
-        .zoom_reset => try app.font.zoomReset(),
+        .zoom_in => app.font.zoomIn(),
+        .zoom_out => app.font.zoomOut(),
+        .zoom_reset => app.font.zoomReset(),
     }
 }
 
@@ -234,8 +234,14 @@ pub fn checkForUpdates() void {
 /// Silent unless there is news. Official builds with `auto_update` only.
 pub fn updateInBackground() void {
     if (!build_info.self_update or !app.config.auto_update) return;
-    if (app.io) |io| selfupdate.removeLeftovers(app.gpa, io);
     startUpdate(.{ .install = true, .announce = false });
+}
+
+/// Once at startup: the copy an update on Windows set aside is no longer
+/// running, whichever way that update was started.
+pub fn removeUpdateLeftovers() void {
+    if (!build_info.self_update) return;
+    if (app.io) |io| selfupdate.removeLeftovers(app.gpa, io);
 }
 
 fn startUpdate(options: update_mod.Options) void {

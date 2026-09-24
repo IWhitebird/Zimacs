@@ -1,27 +1,7 @@
-//! Keyboard and mouse.
-//!
-//!   typing                        inserts text, replacing any selection
-//!   Shift + any movement          extends the selection
-//!   Ctrl+Left / Ctrl+Right        move by word
-//!   Home                          first non-blank, then column 0
-//!   Ctrl+Home / Ctrl+End          start / end of file
-//!   Ctrl+Backspace / Ctrl+Delete  delete a word
-//!   Tab / Shift+Tab               indent / outdent
-//!   Ctrl+Enter / Ctrl+Shift+Enter open a line below / above
-//!   Ctrl+D / Ctrl+Shift+K         duplicate / delete line
-//!   Alt+Up / Alt+Down             move the line
-//!   Ctrl+A C X V Z Y L            select all, copy, cut, paste, undo, redo, select line
-//!   Ctrl+F / F3 / Shift+F3        find, next, previous
-//!   Ctrl+G                        go to line
-//!   Ctrl+S / Ctrl+Shift+S         save / save as
-//!   Ctrl+O / Ctrl+R / Ctrl+,      open, recent, settings
-//!   Ctrl+N / Ctrl+W               new tab / close tab
-//!   Ctrl+Tab / Ctrl+1..9          switch tab
-//!   Ctrl with  +  -  0            zoom in, out, reset
-//!   click, drag, double, triple   place caret, select, select word or line
-//!   mouse wheel                   scroll, Shift for sideways
-//!   title bar                     drag to move, double-click to maximise
-//!   window edges                  drag to resize
+//! Keyboard and mouse. Each frame's input goes to the first of these that
+//! wants it: the title bar, a dialog, the find bar, the prompt, the menus,
+//! and then the text itself. The shortcuts are listed in `menu.zig`, next
+//! to the entries they belong to.
 
 const std = @import("std");
 const pen = @import("raylib");
@@ -38,6 +18,7 @@ const find_mod = @import("find.zig");
 const dialog_mod = @import("dialog.zig");
 const TextField = @import("field.zig").TextField;
 const BufferView = @import("buffer.zig").BufferView;
+const browser_mod = @import("browser.zig");
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
@@ -262,8 +243,7 @@ const FindBar = struct {
         while (true) {
             const code = pen.getCharPressed();
             if (code <= 0 or code > 0x10FFFF) break;
-            // Alt+letter still produces the letter on some platforms.
-            if (alt or ctrl) continue;
+            if (shortcutHeld()) continue;
             var utf8: [4]u8 = undefined;
             const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
             try field.insert(gpa, utf8[0..n]);
@@ -344,7 +324,6 @@ fn handleMenu() !bool {
         if (clicked) {
             app.menu.close();
             try commands.run(action);
-            if (action == .about) app.menu.showing_about = true;
         }
         return true;
     }
@@ -371,6 +350,13 @@ fn shiftDown() bool {
 
 fn altDown() bool {
     return pen.isKeyDown(.left_alt) or pen.isKeyDown(.right_alt);
+}
+
+/// Whether typed characters belong to a shortcut instead. The right Alt is
+/// AltGr on many layouts, where it types characters such as @ and {, so only
+/// the left Alt counts. The browser passes Alt+letter on as the letter.
+fn shortcutHeld() bool {
+    return ctrlDown() or pen.isKeyDown(.left_alt);
 }
 
 /// One screen of lines, minus one so you keep your place while reading.
@@ -412,8 +398,7 @@ fn moveCursor() void {
 
 fn typeText() !void {
     const view = app.buffer.current() orelse return;
-    // Ctrl combinations are shortcuts, not text.
-    if (ctrlDown()) return;
+    if (shortcutHeld()) return;
 
     // The OS has already decoded these, so any keyboard layout, shift state
     // or dead key produces the right character without us mapping keys.
@@ -626,7 +611,7 @@ fn beginGutterClick(point: pen.Vector2, l: layout_mod.Layout) void {
     dragging = true;
 }
 
-fn beginClick(point: pen.Vector2, l: @import("layout.zig").Layout) void {
+fn beginClick(point: pen.Vector2, l: layout_mod.Layout) void {
     const view = app.buffer.current() orelse return;
 
     const now = pen.getTime();
@@ -663,12 +648,12 @@ fn beginClick(point: pen.Vector2, l: @import("layout.zig").Layout) void {
 /// differ wherever a line holds tabs or multi-byte characters, so the line has
 /// to be read to map between them.
 fn offsetAt(
-    view: *@import("buffer.zig").BufferView,
+    view: *BufferView,
     point: pen.Vector2,
     l: layout_mod.Layout,
 ) u32 {
     const cell = app.font.metrics;
-    const at = l.hit(cell, point, 0);
+    const at = l.hit(cell, point);
     var raw: std.ArrayList(u8) = .empty;
     defer raw.deinit(app.gpa);
 
@@ -748,6 +733,7 @@ fn runPrompt() !void {
     while (true) {
         const code = pen.getCharPressed();
         if (code <= 0 or code > 0x10FFFF) break;
+        if (shortcutHeld()) continue;
         var utf8: [4]u8 = undefined;
         const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
         try app.prompt.append(utf8[0..n]);
@@ -758,7 +744,7 @@ fn runPrompt() !void {
     if (pressed(.backspace)) {
         // With nothing typed, backspace steps up a directory.
         if (app.prompt.kind == .browse and app.prompt.text().len == 0) {
-            try commands.chooseInBrowser(@import("browser.zig").parent);
+            try commands.chooseInBrowser(browser_mod.parent);
             return;
         }
         app.prompt.backspace();
@@ -768,7 +754,7 @@ fn runPrompt() !void {
     if (pen.isMouseButtonPressed(.left)) {
         const l = editor.currentLayout();
         if (editor.promptRowAt(pen.getMousePosition(), l, app.font.metrics)) |row| {
-            app.prompt.option = row;
+            app.prompt.pick(row);
             try commitPrompt();
             return;
         }

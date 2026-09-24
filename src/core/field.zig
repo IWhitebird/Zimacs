@@ -125,19 +125,15 @@ pub const TextField = struct {
     }
 };
 
-fn isContinuation(byte: u8) bool {
-    return byte & 0b1100_0000 == 0b1000_0000;
-}
-
 fn charBefore(s: []const u8, at: usize) usize {
     var i = at - 1;
-    while (i > 0 and isContinuation(s[i])) i -= 1;
+    while (i > 0 and text.isTrailing(s[i])) i -= 1;
     return i;
 }
 
 fn charAfter(s: []const u8, at: usize) usize {
     var i = at + 1;
-    while (i < s.len and isContinuation(s[i])) i += 1;
+    while (i < s.len and text.isTrailing(s[i])) i += 1;
     return i;
 }
 

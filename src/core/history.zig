@@ -11,6 +11,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const Edit = struct {
+    /// Never reused, so a state of the text can be told apart from every
+    /// other even after undo or trimming.
+    id: u64 = 0,
     offset: u32,
     /// Text that was there before. Owned.
     removed: []const u8,
@@ -44,6 +47,10 @@ pub const History = struct {
     /// Set at a save point, so the next edit starts an entry of its own
     /// instead of joining one that has already been saved.
     sealed: bool = false,
+    next_id: u64 = 1,
+    /// The state before the oldest kept entry: 0 at first, and the last
+    /// dropped entry's id once trimming has started.
+    base: u64 = 0,
 
     const Self = @This();
 
@@ -58,6 +65,11 @@ pub const History = struct {
 
     pub fn canRedo(h: Self) bool {
         return h.applied < h.edits.items.len;
+    }
+
+    /// Names the text as it stands: equal positions mean equal text.
+    pub fn position(h: Self) u64 {
+        return if (h.applied == 0) h.base else h.edits.items[h.applied - 1].id;
     }
 
     /// Records a change that has already been made to the text.
@@ -82,7 +94,10 @@ pub const History = struct {
 
         if (try h.merge(edit)) return;
 
-        try h.edits.append(h.gpa, edit);
+        var fresh = edit;
+        fresh.id = h.next_id;
+        h.next_id += 1;
+        try h.edits.append(h.gpa, fresh);
         h.applied = h.edits.items.len;
         try h.trim();
     }
@@ -111,13 +126,13 @@ pub const History = struct {
         }
     }
 
-    /// Folds `edit` into the previous one when they are part of the same
-    /// gesture. Returns true if it was absorbed.
     /// Stops the next edit merging into the current entry.
     pub fn seal(h: *Self) void {
         h.sealed = true;
     }
 
+    /// Folds `edit` into the previous one when they are part of the same
+    /// gesture. Returns true if it was absorbed.
     fn merge(h: *Self, edit: Edit) !bool {
         if (h.sealed) {
             h.sealed = false;
@@ -160,6 +175,7 @@ pub const History = struct {
     fn trim(h: *Self) !void {
         if (h.edits.items.len <= h.limit) return;
         const excess = h.edits.items.len - h.limit;
+        h.base = h.edits.items[excess - 1].id;
         for (h.edits.items[0..excess]) |e| e.deinit(h.gpa);
         std.mem.copyForwards(Edit, h.edits.items, h.edits.items[excess..]);
         h.edits.shrinkRetainingCapacity(h.edits.items.len - excess);
@@ -263,4 +279,26 @@ test "the oldest entries are dropped at the limit" {
     try testing.expectEqual(@as(usize, 3), h.edits.items.len);
     try testing.expectEqual(@as(u32, 30), h.edits.items[0].offset);
     try testing.expectEqual(@as(usize, 3), h.applied);
+}
+
+test "a position is never repeated, whatever undo and trimming do" {
+    var h = History{ .gpa = testing.allocator, .limit = 2 };
+    defer h.deinit();
+    try testing.expectEqual(@as(u64, 0), h.position());
+
+    try h.record(0, "", "a\n", 0, 2);
+    const after_a = h.position();
+    _ = h.undo();
+    try testing.expectEqual(@as(u64, 0), h.position());
+    // A different edit from the same starting point is a different state.
+    try h.record(0, "", "b\n", 0, 2);
+    try testing.expect(h.position() != after_a);
+
+    try h.record(2, "", "c\n", 2, 4);
+    try h.record(4, "", "d\n", 4, 6);
+    // One entry was trimmed; undoing everything left is not the empty text.
+    _ = h.undo();
+    _ = h.undo();
+    try testing.expect(!h.canUndo());
+    try testing.expect(h.position() != 0);
 }

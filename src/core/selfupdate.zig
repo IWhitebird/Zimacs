@@ -47,16 +47,38 @@ pub fn fetchAndInstall(gpa: std.mem.Allocator, io: std.Io, version: Version) !vo
     var sig_url_buf: [260]u8 = undefined;
     const sig_url = std.fmt.bufPrint(&sig_url_buf, "{s}.sig", .{url}) catch return error.NoSpace;
 
+    const exe = try std.process.executablePathAlloc(io, gpa);
+    defer gpa.free(exe);
+    // Before downloading, so a copy that cannot replace itself learns so
+    // without fetching the whole binary.
+    try checkWritable(io, exe);
+
     const binary = try download(gpa, io, url, max_binary);
     defer gpa.free(binary);
     const signature = try download(gpa, io, sig_url, max_signature);
     defer gpa.free(signature);
 
     try verify(binary, signature, version, plat, public_key);
-
-    const exe = try std.process.executablePathAlloc(io, gpa);
-    defer gpa.free(exe);
     try install(io, exe, binary);
+}
+
+/// Failures that trying again soon will not fix.
+pub fn isPermanent(err: anyerror) bool {
+    return switch (err) {
+        error.AccessDenied, error.PermissionDenied, error.ReadOnlyFileSystem, error.BadSignature, error.Unsupported => true,
+        else => false,
+    };
+}
+
+fn checkWritable(io: std.Io, exe_path: []const u8) !void {
+    const dir_path = std.fs.path.dirname(exe_path) orelse return error.Unavailable;
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
+    defer dir.close(io);
+    var probe_buf: [256]u8 = undefined;
+    const probe = try siblingName(&probe_buf, std.fs.path.basename(exe_path), ".update");
+    const file = try dir.createFile(io, probe, .{});
+    file.close(io);
+    dir.deleteFile(io, probe) catch {};
 }
 
 /// Deletes the `.old` binary a Windows update left.
@@ -180,7 +202,7 @@ fn siblingName(buf: []u8, name: []const u8, suffix: []const u8) ![]const u8 {
 }
 
 fn download(gpa: std.mem.Allocator, io: std.Io, url: []const u8, limit: usize) ![]u8 {
-    const response = try https.get(gpa, io, url, &.{.{ .name = "user-agent", .value = "zimacs" }}, limit);
+    const response = try https.get(gpa, io, url, &.{}, limit);
     errdefer gpa.free(response.body);
     if (response.status != .ok) return error.DownloadRefused;
     if (response.body.len == 0) return error.EmptyDownload;

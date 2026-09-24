@@ -18,9 +18,9 @@ const text_mod = @import("text.zig");
 const textfile = @import("textfile.zig");
 pub const Format = textfile.Format;
 
-/// Refuse anything larger. Piece tree offsets are u32, so 4 GiB is the hard
-/// ceiling; this sits well below it.
-const max_bytes = 512 * 1024 * 1024;
+/// The largest file Zimacs opens, and so the most one tab can hold. Piece
+/// tree offsets are u32, so 4 GiB is the hard ceiling; this sits well below.
+pub const max_file_bytes = 512 * 1024 * 1024;
 
 pub const BufferView = struct {
     gpa: Allocator,
@@ -47,8 +47,9 @@ pub const BufferView = struct {
     path: ?[]const u8 = null,
     /// What the tab shows. Owned.
     name: []const u8,
-    /// The point in the undo history that matches what is on disk.
-    saved_at: usize = 0,
+    /// The history position that matches what is on disk, or null when no
+    /// position does, as for unsaved text brought back by a session.
+    saved: ?u64 = 0,
     /// Bumped by every change to the text, so derived results know to refresh.
     version: u64 = 0,
     /// How the file on disk is encoded, restored on save.
@@ -58,15 +59,16 @@ pub const BufferView = struct {
 
     const Self = @This();
 
-    /// True when the text differs from the file on disk.
     /// Records that the text now matches the file.
     pub fn markSaved(v: *Self) void {
-        v.saved_at = v.history.applied;
+        v.saved = v.history.position();
         v.history.seal();
     }
 
+    /// True when the text differs from the file on disk.
     pub fn edited(v: Self) bool {
-        return v.history.applied != v.saved_at;
+        const saved = v.saved orelse return true;
+        return saved != v.history.position();
     }
 
     pub fn cursorLine(v: *const Self) u32 {
@@ -359,13 +361,13 @@ pub const BufferView = struct {
     /// Steps back over a whole character, so multi-byte text is not split.
     fn charStartBefore(v: *const Self, offset: u32) u32 {
         var i = offset - 1;
-        while (i > 0 and isTrailingByte(v.tree.byteAt(i) orelse 0)) i -= 1;
+        while (i > 0 and text_mod.isTrailing(v.tree.byteAt(i) orelse 0)) i -= 1;
         return i;
     }
 
     fn charEndAfter(v: *const Self, offset: u32) u32 {
         var i = offset + 1;
-        while (i < v.tree.len() and isTrailingByte(v.tree.byteAt(i) orelse 0)) i += 1;
+        while (i < v.tree.len() and text_mod.isTrailing(v.tree.byteAt(i) orelse 0)) i += 1;
         return i;
     }
 };
@@ -447,25 +449,27 @@ pub const Buffer = struct {
 
     /// Switches to `path` if it is already open, otherwise reads it.
     pub fn openOrSelect(b: *Self, path: []const u8) !void {
+        const io = b.io orelse return error.NoFilesystem;
+        const owned_path = try absolute(io, b.gpa, path);
+        errdefer b.gpa.free(owned_path);
+
         for (b.views.items, 0..) |v, i| {
             if (v.path) |p| {
-                if (std.mem.eql(u8, p, path)) {
+                if (std.mem.eql(u8, p, owned_path)) {
+                    b.gpa.free(owned_path);
                     b.active = i;
                     return;
                 }
             }
         }
 
-        const io = b.io orelse return error.NoFilesystem;
-        const stamp = stampOf(io, path);
-        const raw = try std.Io.Dir.cwd().readFileAlloc(io, path, b.gpa, .limited(max_bytes));
+        const stamp = stampOf(io, owned_path);
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, owned_path, b.gpa, .limited(max_file_bytes));
         defer b.gpa.free(raw);
 
         const decoded = try textfile.decode(b.gpa, raw);
         defer b.gpa.free(decoded.text);
 
-        const owned_path = try b.gpa.dupe(u8, path);
-        errdefer b.gpa.free(owned_path);
         const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
         errdefer b.gpa.free(name);
 
@@ -479,7 +483,7 @@ pub const Buffer = struct {
         const io = b.io orelse return error.NoFilesystem;
         const path = view.path orelse return error.NoFileName;
         const stamp = stampOf(io, path);
-        const raw = try std.Io.Dir.cwd().readFileAlloc(io, path, b.gpa, .limited(max_bytes));
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, path, b.gpa, .limited(max_file_bytes));
         defer b.gpa.free(raw);
         const decoded = try textfile.decode(b.gpa, raw);
         defer b.gpa.free(decoded.text);
@@ -584,7 +588,8 @@ pub const Buffer = struct {
     }
 
     pub fn saveAs(b: *Self, view: *BufferView, path: []const u8) !Saved {
-        const owned_path = try b.gpa.dupe(u8, path);
+        const io = b.io orelse return error.NoFilesystem;
+        const owned_path = try absolute(io, b.gpa, path);
         errdefer b.gpa.free(owned_path);
         const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
         errdefer b.gpa.free(name);
@@ -597,17 +602,21 @@ pub const Buffer = struct {
     }
 };
 
+/// `path` made absolute against the working directory, so it still names
+/// the same file when Zimacs next starts somewhere else. Caller frees.
+fn absolute(io: std.Io, gpa: Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(gpa, &.{path});
+    const here = try std.process.currentPathAlloc(io, gpa);
+    defer gpa.free(here);
+    return std.fs.path.resolve(gpa, &.{ here, path });
+}
+
 fn trimNewline(line: []const u8) []const u8 {
     return if (endsWithNewline(line)) line[0 .. line.len - 1] else line;
 }
 
 fn endsWithNewline(line: []const u8) bool {
     return line.len > 0 and line[line.len - 1] == '\n';
-}
-
-/// A UTF-8 byte that continues the character before it.
-fn isTrailingByte(byte: u8) bool {
-    return byte & 0b1100_0000 == 0b1000_0000;
 }
 
 /// A file's size and modification time, enough to tell it was changed.
@@ -1065,4 +1074,38 @@ test "typing straight after a save still counts as unsaved" {
 
     try v.undo();
     try testing.expect(!v.edited());
+}
+
+test "undoing past a save and typing something else counts as unsaved" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    const v = try b.newScratch();
+    try v.insert("a");
+    v.markSaved();
+    try v.undo();
+    try testing.expect(v.edited());
+    try v.insert("z");
+    try testing.expect(v.edited());
+    try v.undo();
+    try v.redo();
+    try testing.expect(v.edited());
+}
+
+test "a file opened by a relative path is stored by its absolute one" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "hi" });
+
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    var relative_buf: [128]u8 = undefined;
+    const relative = try std.fmt.bufPrint(&relative_buf, ".zig-cache/tmp/{s}/notes.txt", .{tmp.sub_path});
+    try b.openOrSelect(relative);
+
+    const stored = b.current().?.path.?;
+    try testing.expect(std.fs.path.isAbsolute(stored));
+    try testing.expect(std.mem.endsWith(u8, stored, relative[1..]));
+    // The same file named either way is the same tab.
+    try b.openOrSelect(stored);
+    try testing.expectEqual(@as(usize, 1), b.views.items.len);
 }

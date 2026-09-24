@@ -5,6 +5,7 @@
 //! reused, so a steady frame allocates nothing however large the file.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const pen = @import("raylib");
 const app = @import("../zimacs.zig");
 const theme = @import("theme.zig");
@@ -494,24 +495,33 @@ pub const Editor = struct {
         pen.endScissorMode();
     }
 
-    /// The Find / Open panel, with its suggestion list.
+    /// The prompt, for opening, saving, going to a line and browsing, with
+    /// its suggestion list.
     fn drawPrompt(e: *Self, l: Layout, cell: Metrics) !void {
         if (!app.prompt.active) return;
 
-        const shown = @min(app.prompt.matches.items.len, max_suggestions);
+        const shown = app.prompt.shown();
         const panel = layout.promptPanel(l, cell, shown);
 
         pen.drawRectangleRec(panel, theme.current.tab_background);
         pen.drawRectangleLinesEx(panel, 1, theme.current.scrollbar);
 
-        // Label and what has been typed, with a block for the caret.
+        // Label and what has been typed, with a block for the caret. What
+        // follows the label is cut from the start to fit, so the end of what
+        // is being typed always shows.
+        const browsing = app.prompt.kind == .browse or app.prompt.kind == .save_into;
+        const label = if (app.prompt.kind == .save_into) "Save into " else app.prompt.label();
         e.status.clearRetainingCapacity();
-        if (app.prompt.kind == .browse or app.prompt.kind == .save_into) {
-            const verb = if (app.prompt.kind == .save_into) "Save into " else "";
-            try e.status.print(app.gpa, "{s}{s}/ {s}", .{ verb, app.browser.dir, app.prompt.text() });
+        if (browsing) {
+            try e.status.print(app.gpa, "{s}/ {s}", .{ app.browser.dir, app.prompt.text() });
         } else {
-            try e.status.print(app.gpa, "{s}{s}", .{ app.prompt.label(), app.prompt.text() });
+            try e.status.appendSlice(app.gpa, app.prompt.text());
         }
+        const room: u32 = @intFromFloat(@max((panel.width - layout.padding * 2) / cell.width - 1, 0));
+        var fitted_buf: [prompt_line_capacity]u8 = undefined;
+        const fitted = text.fitStart(&fitted_buf, e.status.items, room -| @as(u32, @intCast(label.len)));
+        e.status.clearRetainingCapacity();
+        try e.status.print(app.gpa, "{s}{s}", .{ label, fitted });
         const typed = try terminate(&e.status);
         app.font.draw(typed, panel.x + layout.padding, panel.y + layout.padding, theme.current.text);
         pen.drawRectangleRec(.{
@@ -535,7 +545,7 @@ pub const Editor = struct {
         const point = pen.getMousePosition();
         for (app.prompt.matches.items[0..shown], 0..) |option, row| {
             const rect = layout.promptRow(panel, cell, row);
-            const hot = row == app.prompt.option or pen.checkCollisionPointRec(point, rect);
+            const hot = row == app.prompt.highlighted() or pen.checkCollisionPointRec(point, rect);
             if (hot) pen.drawRectangleRec(rect, theme.current.selection);
 
             e.status.clearRetainingCapacity();
@@ -624,11 +634,16 @@ fn drawTick(rect: pen.Rectangle, ink: pen.Color) void {
 /// How much the window behind a dialog is dimmed.
 const dim_alpha = 0.55;
 
+/// Dims the whole window, so a panel drawn next reads as being on top.
+fn dimBehind(l: Layout) void {
+    const window = pen.Rectangle{ .x = 0, .y = 0, .width = l.menu.width, .height = l.status.y + l.status.height };
+    pen.drawRectangleRec(window, pen.fade(theme.current.tab_background, dim_alpha));
+}
+
 fn drawDialog(l: Layout, cell: Metrics) void {
     const q = app.dialog.question orelse return;
     const t = theme.current;
-    const window = pen.Rectangle{ .x = 0, .y = 0, .width = l.menu.width, .height = l.status.y + l.status.height };
-    pen.drawRectangleRec(window, pen.fade(t.tab_background, dim_alpha));
+    dimBehind(l);
 
     const g = dialog_mod.geometry(l, app.font, q);
     pen.drawRectangleRec(g.panel, t.tab_background);
@@ -860,8 +875,10 @@ fn drawDropdown(index: usize, l: Layout, cell: Metrics, point: pen.Vector2) void
 const about_capacity = 12;
 var about_storage: [about_capacity][160]u8 = undefined;
 
+/// Room for the prompt's line once fitted to the panel.
+const prompt_line_capacity = 2048;
+
 fn drawAbout(l: Layout, cell: Metrics) void {
-    const builtin = @import("builtin");
     var lines: [about_capacity][:0]const u8 = undefined;
     var count: usize = 0;
 
@@ -910,11 +927,7 @@ fn drawAbout(l: Layout, cell: Metrics) void {
         .height = height,
     };
 
-    // Dim what is behind so the panel reads as being on top.
-    pen.drawRectangleRec(
-        .{ .x = 0, .y = 0, .width = l.status.width, .height = l.status.y + l.status.height },
-        .{ .r = 0, .g = 0, .b = 0, .a = 160 },
-    );
+    dimBehind(l);
     pen.drawRectangleRec(panel, theme.current.tab_background);
     pen.drawRectangleLinesEx(panel, 1, theme.current.scrollbar);
 
@@ -929,7 +942,7 @@ fn drawAbout(l: Layout, cell: Metrics) void {
 }
 
 /// A short word on the update check, for the status bar. Null while idle.
-/// Quiet checks (the one at startup) show nothing unless there is news.
+/// Background checks show nothing unless there is news.
 fn updateNotice() ?[:0]const u8 {
     const loud = app.update.announce;
     const v = app.update.latest;
@@ -980,13 +993,10 @@ fn aboutUpdateLine() [:0]const u8 {
     };
 }
 
-/// How many suggestions the prompt shows at once.
-pub const max_suggestions: usize = 8;
-
 /// Which suggestion row is under `point`, if the prompt is open.
 pub fn promptRowAt(point: pen.Vector2, l: Layout, cell: Metrics) ?usize {
     if (!app.prompt.active) return null;
-    const shown = @min(app.prompt.matches.items.len, max_suggestions);
+    const shown = app.prompt.shown();
     const panel = layout.promptPanel(l, cell, shown);
     var row: usize = 0;
     while (row < shown) : (row += 1) {
@@ -1007,8 +1017,7 @@ pub fn visibleColumns(l: Layout, cell: Metrics) u32 {
     return if (n <= 0) 0 else @intFromFloat(n);
 }
 
-/// Where tab `index` sits, or null if it has scrolled off the right edge.
-/// Null when the tab is scrolled wholly out of the strip.
+/// Where tab `index` sits, or null when it is scrolled wholly out of the strip.
 pub fn tabRect(index: usize, l: Layout) ?pen.Rectangle {
     var x = l.tabs.x - app.editor.tabs.scroll;
     for (app.buffer.views.items, 0..) |view, i| {

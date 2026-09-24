@@ -49,8 +49,15 @@ pub const Decoded = struct {
 };
 
 pub fn decode(gpa: Allocator, bytes: []const u8) !Decoded {
-    const encoding = detect(bytes);
-    const utf8 = try toUtf8(gpa, bytes, encoding);
+    var encoding = detect(bytes);
+    const utf8 = toUtf8(gpa, bytes, encoding) catch |err| switch (err) {
+        // Unpaired surrogates: keep the bytes rather than refuse the file.
+        error.DanglingSurrogateHalf, error.ExpectedSecondSurrogateHalf, error.UnexpectedSecondSurrogateHalf => blk: {
+            encoding = .windows1252;
+            break :blk try fromWindows1252(gpa, bytes);
+        },
+        else => return err,
+    };
     defer gpa.free(utf8);
     return .{
         .text = try toLf(gpa, utf8),
@@ -122,11 +129,7 @@ fn toUtf8(gpa: Allocator, bytes: []const u8, encoding: Encoding) ![]u8 {
                 const pair = body[i * 2 ..][0..2];
                 u.* = if (encoding == .utf16le) std.mem.readInt(u16, pair, .little) else std.mem.readInt(u16, pair, .big);
             }
-            break :blk std.unicode.utf16LeToUtf8Alloc(gpa, units) catch |err| switch (err) {
-                // Unpaired surrogates: keep the bytes rather than refuse the file.
-                error.DanglingSurrogateHalf, error.ExpectedSecondSurrogateHalf, error.UnexpectedSecondSurrogateHalf => fromWindows1252(gpa, bytes),
-                else => err,
-            };
+            break :blk std.unicode.utf16LeToUtf8Alloc(gpa, units);
         },
         .windows1252 => fromWindows1252(gpa, bytes),
     };
@@ -263,4 +266,12 @@ test "a character Windows-1252 cannot hold is refused, not dropped" {
 
 test "a lone CR is left alone" {
     try roundTrip("a\rb\n");
+}
+
+test "UTF-16 with an unpaired surrogate falls back to bytes and saves back unchanged" {
+    const bytes = "\xFF\xFEa\x00\x00\xD8b\x00";
+    const d = try decode(testing.allocator, bytes);
+    defer testing.allocator.free(d.text);
+    try testing.expectEqual(Encoding.windows1252, d.format.encoding);
+    try roundTrip(bytes);
 }

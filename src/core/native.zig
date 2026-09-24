@@ -1,5 +1,6 @@
 //! Window-system calls raylib does not wrap: handing a move or resize to
-//! the system, and reading the pointer's desktop position. Windows gets a
+//! the system, sizing the window in physical pixels, and reading the
+//! pointer's desktop position. Windows gets a
 //! caption press, X11 a _NET_WM_MOVERESIZE request. Elsewhere these report
 //! failure and the caller moves the window itself.
 
@@ -17,6 +18,19 @@ pub fn systemDrag(edges: Edges) bool {
         else => false,
     };
 }
+
+/// In physical pixels, past raylib, whose `setWindowSize` records the size
+/// as logical and only corrects it once the framebuffer changes. When it
+/// does not, as for a size the system refuses, the layout stays drawn too
+/// large for the window.
+pub fn setWindowSize(width: i32, height: i32) void {
+    glfw.glfwSetWindowSize(glfw.glfwGetCurrentContext(), width, height);
+}
+
+const glfw = struct {
+    extern fn glfwGetCurrentContext() ?*anyopaque;
+    extern fn glfwSetWindowSize(window: ?*anyopaque, width: c_int, height: c_int) void;
+};
 
 /// Asks for rounded window corners. Only Windows 11 draws them for a
 /// frameless window; elsewhere the corners stay square.
@@ -123,7 +137,6 @@ const x11 = struct {
     };
 
     // GLFW's connection, which holds the press's pointer grab.
-    extern fn glfwGetCurrentContext() ?*anyopaque;
     extern fn glfwGetX11Display() ?*Display;
     extern fn glfwGetX11Window(window: ?*anyopaque) Window;
 
@@ -181,7 +194,7 @@ const x11 = struct {
         const d = glfwGetX11Display() orelse return false;
         if (!managerSupports(d)) return false;
         const at = cursor() orelse return false;
-        const window = glfwGetX11Window(glfwGetCurrentContext());
+        const window = glfwGetX11Window(glfw.glfwGetCurrentContext());
         const root = XDefaultRootWindow(d);
         const x: c_int = @intFromFloat(at.x);
         const y: c_int = @intFromFloat(at.y);

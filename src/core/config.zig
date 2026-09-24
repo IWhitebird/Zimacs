@@ -58,7 +58,7 @@ pub const Config = struct {
     show_hidden: bool = false,
     /// Draw our own title bar instead of the operating system's frame.
     custom_titlebar: bool = true,
-    /// Install new releases on startup. Only official builds ever do.
+    /// Install new releases in the background. Only official builds ever do.
     auto_update: bool = true,
     colors: Colors = .{},
     /// The first line that could not be used, to tell the user about.
@@ -68,8 +68,7 @@ pub const Config = struct {
 
     const Self = @This();
 
-    fn note(c: *Self, line: u32, what: []const u8, why: []const u8) void {
-        std.debug.print("{s} line {d}: {s} ({s})\n", .{ file_name, line, why, what });
+    fn note(c: *Self, line: u32, why: []const u8) void {
         if (c.problem == null) c.problem = .{ .line = line, .why = why };
     }
 
@@ -84,12 +83,12 @@ pub const Config = struct {
             if (line.len == 0 or line[0] == '#') continue;
 
             const split = std.mem.indexOfScalar(u8, line, '=') orelse {
-                c.note(number, line, "expected key = value");
+                c.note(number, "expected key = value");
                 continue;
             };
             const key = trim(line[0..split]);
             const value = trim(line[split + 1 ..]);
-            c.applyPair(key, value) catch c.note(number, key, "bad value");
+            c.applyPair(key, value) catch c.note(number, "bad value");
         }
     }
 
@@ -126,10 +125,12 @@ pub const Config = struct {
 };
 
 pub const file_name = "config.ini";
+/// Far more than any settings file needs.
+pub const max_bytes = 1024 * 1024;
 
 /// Writes one setting into the file at `path`, keeping everything else.
 pub fn store(io: std.Io, gpa: std.mem.Allocator, path: []const u8, key: []const u8, value: []const u8) !void {
-    const old = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1024 * 1024)) catch |err| switch (err) {
+    const old = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_bytes)) catch |err| switch (err) {
         error.FileNotFound => try gpa.dupe(u8, ""),
         else => return err,
     };
@@ -172,56 +173,49 @@ fn isSettingFor(line: []const u8, key: []const u8) bool {
     return eq(trim(trimmed[0..split]), key);
 }
 
-const default_text =
-    \\# Zimacs settings. Delete this file to get the defaults back.
-    \\
-    \\font_size = 18
-    \\
-    \\# line, block or underline
-    \\caret_style = line
-    \\
-    \\tab_width = 4
-    \\expand_tabs = true
-    \\
-    \\# Reopen the buffers you had last time, including unsaved ones.
-    \\restore_session = true
-    \\
-    \\# Fold long lines instead of scrolling sideways.
-    \\wrap_lines = false
-    \\
-    \\# Show dot-files in the file browser.
-    \\show_hidden = false
-    \\
-    \\# Draw Zimacs's own title bar. Set to false for your system's window
-    \\# frame instead. Takes effect the next time Zimacs starts.
-    \\custom_titlebar = true
-    \\
-    \\# Download and install new releases in the background. They are only
-    \\# installed if signed by the Zimacs release key, and run next start.
-    \\auto_update = true
-    \\
-    \\background = #181818
-    \\text = #dedee6
-    \\current_line = #212121
-    \\selection = #264f78
-    \\gutter_text = #5c6070
-    \\gutter_text_active = #bec3d7
-    \\status_background = #121212
-    \\status_text = #a0a5b9
-    \\tab_background = #101010
-    \\tab_active = #181818
-    \\tab_text = #8a8f9e
-    \\tab_text_active = #dedee6
-    \\caret = #78c8ff
-    \\hint = #6e7284
-    \\scrollbar = #3a3a42
-    \\scrollbar_hover = #55555f
-    \\close_hover = #c42b1c
-    \\close_hover_text = #ffffff
-    \\find_match = #5c3f12
-    \\warning = #e5a94b
-    \\
-;
+/// The file written on first run: every setting at its default, so the
+/// values come from `Config` and `Colors` rather than a second copy here.
+const default_text = blk: {
+    const d = Config{};
+    var text: []const u8 = std.fmt.comptimePrint(
+        \\# Zimacs settings. Delete this file to get the defaults back.
+        \\
+        \\font_size = {d}
+        \\
+        \\# line, block or underline
+        \\caret_style = {s}
+        \\
+        \\tab_width = {d}
+        \\expand_tabs = {}
+        \\
+        \\# Reopen the buffers you had last time, including unsaved ones.
+        \\restore_session = {}
+        \\
+        \\# Fold long lines instead of scrolling sideways.
+        \\wrap_lines = {}
+        \\
+        \\# Show dot-files in the file browser.
+        \\show_hidden = {}
+        \\
+        \\# Draw Zimacs's own title bar. Set to false for your system's window
+        \\# frame instead. Takes effect the next time Zimacs starts.
+        \\custom_titlebar = {}
+        \\
+        \\# Download and install new releases in the background. They are only
+        \\# installed if signed by the Zimacs release key, and run next start.
+        \\auto_update = {}
+        \\
+        \\
+    , .{
+        d.font_size,       @tagName(d.caret_style), d.tab_width,   d.expand_tabs,
+        d.restore_session, d.wrap_lines,            d.show_hidden, d.custom_titlebar,
+        d.auto_update,
+    });
+    for (@typeInfo(Colors).@"struct".fields) |field| {
+        text = text ++ std.fmt.comptimePrint("{s} = #{x:0>6}\n", .{ field.name, @field(d.colors, field.name) });
+    }
+    break :blk text;
+};
 
 fn parseColor(value: []const u8) !u24 {
     const digits = if (value.len > 0 and value[0] == '#') value[1..] else value;
@@ -324,4 +318,11 @@ test "the first bad line is remembered so it can be shown" {
     var c = Config{};
     c.applyText("font_size = 18\nnonsense\ntab_width = lots\n");
     try testing.expectEqual(@as(u32, 2), c.problem.?.line);
+}
+
+test "the generated file reads back as the defaults" {
+    var c = Config{};
+    c.applyText(default_text);
+    try testing.expect(c.problem == null);
+    try testing.expectEqualDeep(Config{}, c);
 }

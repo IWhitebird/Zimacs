@@ -1,5 +1,6 @@
 const std = @import("std");
 const zimacs = @import("zimacs.zig");
+const browser_calls = @import("core/web.zig");
 
 /// Panics on the web go to the browser console.
 ///
@@ -12,12 +13,10 @@ pub const panic = if (zimacs.on_web)
 else
     std.debug.FullPanic(std.debug.defaultPanic);
 
-extern fn emscripten_console_error(text: [*:0]const u8) void;
-
 fn webPanic(message: []const u8, _: ?usize) noreturn {
     var buf: [1024]u8 = undefined;
     const text = std.fmt.bufPrintZ(&buf, "Zimacs panic: {s}", .{message}) catch "Zimacs panic";
-    emscripten_console_error(text);
+    browser_calls.consoleError(text);
     @trap();
 }
 

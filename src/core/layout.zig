@@ -81,8 +81,7 @@ pub const Layout = struct {
     /// Which screen row and column the given point falls on, counted from the
     /// top of the text area. Turning that into a document position is the
     /// caller's job, since it depends on whether lines are folded.
-    pub fn hit(l: Layout, cell: Metrics, point: pen.Vector2, unused: u32) struct { row: u32, column: u32 } {
-        _ = unused;
+    pub fn hit(l: Layout, cell: Metrics, point: pen.Vector2) struct { row: u32, column: u32 } {
         const row = @max((point.y - l.text.y) / cell.height, 0);
         const col = @max((point.x - l.text.x - padding) / cell.width + 0.5, 0);
         return .{
@@ -159,8 +158,8 @@ pub fn columnAtTrack(track: pen.Rectangle, x: f32, visible: u32, total: u32) u32
     return offsetAt(track.width, x - track.x, visible, total);
 }
 
-/// The floating panel used for Find and Open. Sits near the top of the text
-/// area, out of the way of what you are reading.
+/// The floating panel the prompt uses. Sits near the top of the text area,
+/// out of the way of what you are reading.
 pub fn promptPanel(l: Layout, cell: Metrics, rows: usize) pen.Rectangle {
     const width = @min(@max(l.text.width * 0.6, 320), l.text.width - padding * 2);
     const height = cell.height + padding * 2 +

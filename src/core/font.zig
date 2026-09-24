@@ -61,6 +61,10 @@ const Glyphs = struct {
 /// More than either font has.
 const max_glyphs = 4096;
 
+/// Tab stops in interface text such as labels, which has no settings of its
+/// own; the text being edited uses `tab_width`.
+const label_tab_width = 4;
+
 var text_glyphs: Glyphs = .{};
 /// Emoji are drawn from a second font, since the text font has none.
 /// `text.isWide` decides which font a character comes from.
@@ -107,6 +111,8 @@ pub const Font = struct {
     emoji: pen.Font = undefined,
     metrics: Metrics = .{},
     loaded: bool = false,
+    /// The size or density changed and the atlas has not caught up.
+    outdated: bool = false,
 
     pub const default_size: f32 = 18;
     pub const min_size: f32 = 8;
@@ -149,6 +155,7 @@ pub const Font = struct {
         f.handle = next;
         f.emoji = next_emoji;
         f.loaded = true;
+        f.outdated = false;
         gui.setFont(next);
         f.metrics = f.measure();
     }
@@ -160,36 +167,43 @@ pub const Font = struct {
         f.loaded = false;
     }
 
-    pub fn setSize(f: *Self, size: f32) !void {
+    /// Takes effect at the next `refresh`, since the atlas cannot change
+    /// while a frame is drawing from it.
+    pub fn setSize(f: *Self, size: f32) void {
         const next = std.math.clamp(size, min_size, max_size);
-        if (f.loaded and next == f.size) return;
+        if (next == f.size) return;
         f.size = next;
-        try f.load();
+        f.outdated = true;
     }
 
-    /// Rerasterises when the window moves to a display with another scale.
-    pub fn setDensity(f: *Self, density: f32) !void {
+    /// For a window that moved to a display with another scale. Takes effect
+    /// at the next `refresh`.
+    pub fn setDensity(f: *Self, density: f32) void {
         if (density <= 0 or density == f.density) return;
         f.density = density;
-        if (f.loaded) try f.load();
+        f.outdated = true;
     }
 
-    /// Rebuilds the atlases when text has used characters they lack.
+    pub fn needsRefresh(f: Self) bool {
+        return f.loaded and (f.outdated or text_glyphs.stale() or emoji_glyphs.stale());
+    }
+
+    /// Rebuilds the atlases for a new size or density, or for characters
+    /// they lack. Called between frames.
     pub fn refresh(f: *Self) !void {
-        if (!f.loaded) return;
-        if (text_glyphs.stale() or emoji_glyphs.stale()) try f.load();
+        if (f.needsRefresh()) try f.load();
     }
 
-    pub fn zoomIn(f: *Self) !void {
-        try f.setSize(f.size + zoom_step);
+    pub fn zoomIn(f: *Self) void {
+        f.setSize(f.size + zoom_step);
     }
 
-    pub fn zoomOut(f: *Self) !void {
-        try f.setSize(f.size - zoom_step);
+    pub fn zoomOut(f: *Self) void {
+        f.setSize(f.size - zoom_step);
     }
 
-    pub fn zoomReset(f: *Self) !void {
-        try f.setSize(f.base);
+    pub fn zoomReset(f: *Self) void {
+        f.setSize(f.base);
     }
 
     /// How far the text is zoomed from the configured size.
@@ -203,7 +217,7 @@ pub const Font = struct {
     /// width. Computing it rather than asking raylib also means layout maths
     /// works without a window, which keeps it testable.
     pub fn widthOf(f: Self, s: [:0]const u8) f32 {
-        return @as(f32, @floatFromInt(text.width(s, 4))) * f.metrics.width;
+        return @as(f32, @floatFromInt(text.width(s, label_tab_width))) * f.metrics.width;
     }
 
     /// Draws a string that sits on the character grid.

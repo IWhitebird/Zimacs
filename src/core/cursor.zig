@@ -13,6 +13,7 @@ const tree_mod = @import("piecetree.zig");
 const PieceTree = tree_mod.PieceTree;
 const Position = tree_mod.Position;
 const isWord = @import("text.zig").isWord;
+const isTrailing = @import("text.zig").isTrailing;
 
 pub const Range = struct {
     start: u32,
@@ -39,12 +40,6 @@ pub const Cursor = struct {
         return tree.positionAt(c.offset);
     }
 
-    /// 1-based line and column, for showing to the user.
-    pub fn displayPosition(c: Self, tree: *const PieceTree) Position {
-        const p = tree.positionAt(c.offset);
-        return .{ .line = p.line + 1, .column = p.column + 1 };
-    }
-
     pub fn hasSelection(c: Self) bool {
         return c.selection() != null;
     }
@@ -57,10 +52,6 @@ pub const Cursor = struct {
             .start = @min(anchor, c.offset),
             .end = @max(anchor, c.offset),
         };
-    }
-
-    pub fn clearSelection(c: *Self) void {
-        c.anchor = null;
     }
 
     pub fn selectAll(c: *Self, tree: *const PieceTree) void {
@@ -231,10 +222,6 @@ pub const Cursor = struct {
     }
 };
 
-fn isTrailing(byte: u8) bool {
-    return byte & 0b1100_0000 == 0b1000_0000;
-}
-
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
@@ -305,15 +292,6 @@ test "home stops at the indent first, then the true start" {
     try testing.expectEqual(@as(u32, 0), c.offset); // column 0
     c.home(&tree, false);
     try testing.expectEqual(@as(u32, 4), c.offset); // and back
-}
-
-test "display position is 1-based" {
-    var tree = try treeOf("a\nb");
-    defer tree.deinit();
-
-    const d = (Cursor{ .offset = 2 }).displayPosition(&tree);
-    try testing.expectEqual(@as(u32, 2), d.line);
-    try testing.expectEqual(@as(u32, 1), d.column);
 }
 
 test "arrow keys move by character, not by byte" {

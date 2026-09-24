@@ -21,7 +21,6 @@ const header_v1 = "zimacs-session 1";
 const header_v2 = "zimacs-session 2";
 const header = "zimacs-session 3";
 const max_index_bytes = 4 * 1024 * 1024;
-const max_text_bytes = 512 * 1024 * 1024;
 
 /// Window position and size in window-system units. The rectangle is the
 /// un-maximised one.
@@ -173,7 +172,8 @@ pub fn signature(b: *const Buffer, extras: Extras) u64 {
         hashValue(&h, view.cursor.anchor orelse std.math.maxInt(u32));
         hashValue(&h, view.top_line);
         hashValue(&h, view.left_column);
-        hashValue(&h, view.saved_at);
+        hashValue(&h, view.saved orelse std.math.maxInt(u64));
+        hashValue(&h, view.history.position());
         h.update(view.name);
         h.update(view.path orelse "");
     }
@@ -279,7 +279,7 @@ fn loadOne(b: *Buffer, io: std.Io, gpa: Allocator, dir: std.Io.Dir, entry: Entry
     if (entry.has_text) {
         var name_buf: [32]u8 = undefined;
         const file = try std.fmt.bufPrint(&name_buf, "{d}.txt", .{entry.index});
-        const text = try dir.readFileAlloc(io, file, gpa, .limited(max_text_bytes));
+        const text = try dir.readFileAlloc(io, file, gpa, .limited(buffer_mod.max_file_bytes));
         defer gpa.free(text);
 
         const view = try b.restore(path, entry.name, text);
@@ -287,8 +287,8 @@ fn loadOne(b: *Buffer, io: std.Io, gpa: Allocator, dir: std.Io.Dir, entry: Entry
         view.format = entry.format;
         // The file as it was then, so a change made while closed is noticed.
         view.disk = entry.disk;
-        // Unsaved text differs from disk, so mark it edited.
-        view.saved_at = 1;
+        // Unsaved text differs from disk, so no point in its history matches.
+        view.saved = null;
     } else {
         try b.openOrSelect(path orelse return error.NoPath);
         if (b.current()) |view| place(view, entry);
@@ -314,8 +314,10 @@ fn writeAtomic(dir: std.Io.Dir, io: std.Io, name: []const u8, data: []const u8) 
     try dir.rename(tmp, dir, name, io);
 }
 
+/// Field by field, so padding bytes, which hold nothing in particular,
+/// cannot make an unchanged session look changed.
 fn hashValue(h: *std.hash.Wyhash, value: anytype) void {
-    h.update(std.mem.asBytes(&value));
+    std.hash.autoHash(h, value);
 }
 
 fn appendLine(

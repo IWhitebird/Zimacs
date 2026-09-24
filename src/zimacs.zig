@@ -4,8 +4,8 @@
 //! loop. Each component is an `Artifact` in one list: set up in order,
 //! rendered in order every frame, torn down in reverse.
 //!
-//! Render order matters. Input runs last, so a key pressed this frame is acted
-//! on at the start of the next one.
+//! Render order matters. Input runs last, so what a key does is drawn on the
+//! next frame, which `idle.pace` makes sure follows.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -13,19 +13,16 @@ const pen = @import("raylib");
 
 const build_info = @import("build_info");
 const commands = @import("core/commands.zig");
-const idle = @import("core/idle.zig");
 const config_mod = @import("core/config.zig");
+const idle = @import("core/idle.zig");
 const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
 const session = @import("core/session.zig");
-const web = @import("core/web.zig");
-
-/// A large real file for the web demo, from a mirror that sends CORS headers.
-const sqlite_url = "https://cdn.jsdelivr.net/gh/gittiver/sqlite3-amalgamation@master/src/sqlite3/sqlite3.c";
-const welcome_data = @embedFile("welcome_data");
-const update_mod = @import("core/update.zig");
 const theme = @import("core/theme.zig");
+const update_mod = @import("core/update.zig");
+const web = @import("core/web.zig");
 const window_mod = @import("core/window.zig");
+const DiskWatch = @import("core/buffer.zig").DiskWatch;
 
 pub const Artifact = @import("core/artifact.zig").Artifact;
 pub const Buffer = @import("core/buffer.zig").Buffer;
@@ -42,7 +39,7 @@ pub const Find = @import("core/find.zig").Find;
 pub const Dialog = @import("core/dialog.zig").Dialog;
 pub const Notice = @import("core/notice.zig").Notice;
 
-const leak_checks = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
+const leak_checks = builtin.mode == .Debug;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
 /// Debug builds get leak checking, release builds get speed.
@@ -59,6 +56,10 @@ else
 
 /// Shown in the About panel. Comes from build.zig.zon.
 pub const version = build_info.version;
+
+/// A large real file for the web demo, from a mirror that sends CORS headers.
+const sqlite_url = "https://cdn.jsdelivr.net/gh/gittiver/sqlite3-amalgamation@master/src/sqlite3/sqlite3.c";
+const welcome_data = @embedFile("welcome_data");
 
 /// True for the web build, which has no filesystem and no child processes.
 pub const on_web = builtin.os.tag == .emscripten;
@@ -152,6 +153,7 @@ pub fn run(start: Start) !void {
         commands.tell(.problem, "{s} line {d}: {s}", .{ config_mod.file_name, problem.line, problem.why });
     }
 
+    commands.removeUpdateLeftovers();
     if (io) |active_io| idle.start(active_io);
     defer idle.stop();
 
@@ -169,6 +171,9 @@ pub fn run(start: Start) !void {
         if (update_schedule.due(pen.getTime(), &update)) commands.updateInBackground();
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
+        // Before drawing too: the atlas cannot change under a frame using it.
+        font.setDensity(window_mod.density());
+        font.refresh() catch |err| reportFrameError("Font", err);
 
         pen.beginDrawing();
         defer pen.endDrawing();
@@ -179,7 +184,7 @@ pub fn run(start: Start) !void {
 }
 
 var autosave = session.Autosave{};
-var disk_watch = @import("core/buffer.zig").DiskWatch{};
+var disk_watch = DiskWatch{};
 var update_schedule = update_mod.Schedule{};
 
 fn lastExtras(session_dir: ?[]const u8) session.Extras {
@@ -242,8 +247,6 @@ fn sqliteArrived(bytes: []const u8) void {
     buffer.active = was_active;
 }
 
-extern fn emscripten_console_error(text: [*:0]const u8) void;
-
 /// A failure while drawing must not take the whole editor down, and on the
 /// web it has to be said out loud: `std.debug` cannot print there, so an
 /// error returned out of the frame loop would vanish without trace.
@@ -252,7 +255,7 @@ fn reportFrameError(who: []const u8, err: anyerror) void {
         var buf: [256]u8 = undefined;
         const text = std.fmt.bufPrintZ(&buf, "Zimacs: {s} failed: {s}", .{ who, @errorName(err) }) catch
             "Zimacs: render failed";
-        emscripten_console_error(text);
+        web.consoleError(text);
     } else {
         std.debug.print("{s} failed: {s}\n", .{ who, @errorName(err) });
         commands.report(who, err);
@@ -263,7 +266,8 @@ fn reportFrameError(who: []const u8, err: anyerror) void {
 /// the recent list cannot drift out of date.
 pub fn openFile(path: []const u8) !void {
     try buffer.openOrSelect(path);
-    recent.add(path) catch {};
+    // As the buffer stored it: absolute, so it means the same file later.
+    if (buffer.current()) |view| if (view.path) |stored| recent.add(stored) catch {};
 }
 
 fn loadConfig(start: Start) void {
@@ -275,7 +279,7 @@ fn loadConfig(start: Start) void {
     const file = std.fs.path.join(gpa, &.{ dir, config_mod.file_name }) catch return;
     config_path = file;
 
-    const text = std.Io.Dir.cwd().readFileAlloc(active_io, file, gpa, .limited(1 << 20)) catch {
+    const text = std.Io.Dir.cwd().readFileAlloc(active_io, file, gpa, .limited(config_mod.max_bytes)) catch {
         // No config yet: leave one behind so it is easy to find and edit.
         config_mod.Config.writeDefault(active_io, dir) catch {};
         return;

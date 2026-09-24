@@ -89,8 +89,6 @@ pub const Window = struct {
             w.height = pen.getRenderHeight();
         }
         w.trackNormal();
-        try app.font.setDensity(density());
-        try app.font.refresh();
         openDroppedFiles();
     }
 
@@ -215,19 +213,9 @@ const Drag = struct {
             const y = if (d.edges.top) d.position.y + d.size.y - height else d.position.y;
             pen.setWindowPosition(round(x), round(y));
         }
-        setPhysicalSize(round(width), round(height));
+        native.setWindowSize(round(width), round(height));
     }
 };
-
-extern fn glfwGetCurrentContext() ?*anyopaque;
-extern fn glfwSetWindowSize(window: ?*anyopaque, width: c_int, height: c_int) void;
-
-/// Past raylib, whose `setWindowSize` records the size as logical and only
-/// corrects it once the framebuffer changes. When it does not, as for a
-/// size the system refuses, the layout stays drawn too large for the window.
-fn setPhysicalSize(width: i32, height: i32) void {
-    glfwSetWindowSize(glfwGetCurrentContext(), width, height);
-}
 
 /// Restores a maximised window with the pointer at the same fraction across.
 fn restoreUnderCursor() void {

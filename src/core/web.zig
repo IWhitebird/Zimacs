@@ -1,6 +1,6 @@
-//! Fetching a file over HTTP in the web build. Compiles to nothing elsewhere.
+//! Browser calls for the web build: fetching a file over HTTP and writing
+//! to the console. They compile to nothing elsewhere.
 
-const std = @import("std");
 const builtin = @import("builtin");
 
 const on_web = builtin.os.tag == .emscripten;
@@ -29,6 +29,11 @@ fn failed(_: ?*anyopaque) callconv(.c) void {
     pending = null;
 }
 
+pub fn consoleError(text: [*:0]const u8) void {
+    if (on_web) emscripten_console_error(text);
+}
+
+extern fn emscripten_console_error(text: [*:0]const u8) void;
 extern fn emscripten_async_wget_data(
     url: [*:0]const u8,
     arg: ?*anyopaque,
