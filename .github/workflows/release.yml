@@ -6,7 +6,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 env:
   ZIG_VERSION: 0.16.0

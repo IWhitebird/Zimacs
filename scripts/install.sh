@@ -2,7 +2,7 @@
 # Installs the latest Zimacs release under ~/.local and registers it with the
 # desktop, so it appears in the applications menu alongside everything else.
 #
-#   curl -fsSL https://raw.githubusercontent.com/IWhitebird/Zimacs/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts/install.sh | sh
 #
 # Set PREFIX to install somewhere other than ~/.local.
 set -eu

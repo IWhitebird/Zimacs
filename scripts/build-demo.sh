@@ -4,8 +4,8 @@
 #
 #   sh scripts/build-demo.sh
 #
-# The output is not committed. Run this before `npm run build` in www/ if you
-# want the live demo, and the site works without it either way.
+# The output is committed, since the site is deployed straight from the
+# repository. Run this again whenever the editor changes.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)

@@ -47,7 +47,9 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       # No -Dtarget: naming the target turns off the native library search.
       # -Dcpu=baseline so the result runs on processors older than the runner.
-      - run: zig build -Dcpu=baseline -Doptimize=ReleaseFast
+      # The same flags as a release, so this builds what ships.
+      - run: zig build -Dcpu=baseline -Doptimize=ReleaseSafe -Dself-update=true
+      - run: scripts/check-baseline.sh zig-out/bin/Zimacs
 
   build-cross:
     # These need no host libraries, so Zig cross-compiles them as-is.
@@ -66,4 +68,6 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - run: zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Doptimize=ReleaseFast
+      - run: zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Doptimize=ReleaseSafe -Dself-update=true
+      - if: matrix.name == 'windows'
+        run: scripts/check-baseline.sh zig-out/bin/Zimacs.exe

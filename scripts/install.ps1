@@ -1,7 +1,7 @@
 # Installs the latest Zimacs release under %LOCALAPPDATA%, adds it to PATH and
 # puts a shortcut in the Start Menu so it appears in the app list and search.
 #
-#   irm https://raw.githubusercontent.com/IWhitebird/Zimacs/master/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 

@@ -93,70 +93,6 @@ function Install() {
   );
 }
 
-/* The poster the demo sits behind: a drawing of the editor with its file
-   browser open, so the frame is not an empty rectangle before you launch it. */
-function Poster() {
-  const TREE = [
-    ["dir", "src/"],
-    ["file", "main.zig"],
-    ["file", "piecetree.zig"],
-    ["file", "buffer.zig"],
-    ["file", "editor.zig"],
-    ["dir", "assets/"],
-    ["file", "README.md"],
-  ];
-
-  return (
-    <div className="poster" aria-hidden="true">
-      <div className="tabbar">
-        <span className="tab-chip on">main.zig</span>
-        <span className="tab-chip">piecetree.zig</span>
-        <span className="tab-chip dirty">notes.md</span>
-      </div>
-      <div className="body">
-        <div className="tree">
-          {TREE.map(([kind, name]) => (
-            <span key={name} className={kind}>
-              {name}
-            </span>
-          ))}
-        </div>
-        <div className="gutter">
-          {[41, 42, 43, 44, 45, 46, 47].map((n) => (
-            <span key={n} className={n === 44 ? "cur" : ""}>
-              {n}
-            </span>
-          ))}
-        </div>
-        <div className="code">
-          <div>
-            <span className="k">pub fn</span> <span className="f">edit</span>
-            (self: *BufferView, at: u32) !<span className="t">void</span> {"{"}
-          </div>
-          <div>
-            {"    "}
-            <span className="c">// every edit funnels through here</span>
-          </div>
-          <div>
-            {"    "}
-            <span className="k">try</span> self.tree.insert(at, text);
-          </div>
-          <div className="hl">
-            {"    "}self.cursor.offset = at + text.len;
-            <span className="caret" />
-          </div>
-          <div>{"    "}self.history.record(.insert, at);</div>
-          <div>{"}"}</div>
-        </div>
-      </div>
-      <div className="status">
-        <span>main.zig</span>
-        <span className="right">Ln 44, Col 32 &nbsp; UTF-8 &nbsp; Zig</span>
-      </div>
-    </div>
-  );
-}
-
 function Demo() {
   // The demo is built by a separate script, so the page has to cope with it
   // being absent. The iframe starts loading immediately either way.
@@ -192,15 +128,12 @@ function Demo() {
 
       <div className="stage">
         {missing ? (
-          <>
-            <Poster />
-            <div className="veil">
-              <div className="veil-inner">
-                <p className="veil-note">The demo has not been built yet.</p>
-                <code className="veil-cmd">sh scripts/build-demo.sh</code>
-              </div>
+          <div className="veil">
+            <div className="veil-inner">
+              <p className="veil-note">The demo has not been built yet.</p>
+              <code className="veil-cmd">sh scripts/build-demo.sh</code>
             </div>
-          </>
+          </div>
         ) : (
           <>
             <iframe
