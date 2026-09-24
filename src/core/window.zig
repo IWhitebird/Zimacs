@@ -90,6 +90,7 @@ pub const Window = struct {
         }
         w.trackNormal();
         try app.font.setDensity(density());
+        try app.font.refresh();
         openDroppedFiles();
     }
 

@@ -9,57 +9,80 @@ const std = @import("std");
 const pen = @import("raylib");
 const gui = @import("raygui");
 const text = @import("text.zig");
+const cmap = @import("cmap.zig");
 
 const data = @embedFile("font_data");
 const emoji_data = @embedFile("emoji_data");
 
-/// Emoji blocks carried by the second font. Kept in step with
-/// `text.isWide`, which decides how much room they take on screen.
-const emoji_codepoints = blk: {
-    const ranges = [_][2]i32{
-        .{ 0x2600, 0x27BF },
-        .{ 0x1F300, 0x1F5FF },
-        .{ 0x1F600, 0x1F64F },
-        .{ 0x1F680, 0x1F6FF },
-        .{ 0x1F900, 0x1F9FF },
-    };
-    break :blk &collect(&ranges);
-};
+/// Characters get a glyph in an atlas the first time something draws them,
+/// so an atlas holds what the text uses rather than the whole font: all of
+/// either font at a large zoom would not fit in one texture.
+const Glyphs = struct {
+    const Set = std.StaticBitSet(codepoint_limit);
+    const codepoint_limit = 0x20000;
 
-/// Which characters get a glyph in the atlas.
-///
-/// raylib's default is the 95 printable ASCII characters, which turns every
-/// accented letter into a question mark. Latin-1 Supplement and Latin
-/// Extended-A cover the European languages JetBrains Mono actually has glyphs
-/// for; CJK and emoji would need a different font entirely.
-const codepoints = blk: {
-    const ranges = [_][2]i32{
-        .{ 0x0020, 0x007E }, // printable ASCII
-        .{ 0x00A0, 0x024F }, // Latin-1 Supplement, Latin Extended-A and B
-        .{ 0x2010, 0x203A }, // dashes and quotation marks
-        .{ 0x2190, 0x21FF }, // arrows
-    };
-    break :blk &collect(&ranges);
-};
+    /// What the font file can draw.
+    available: Set = .initEmpty(),
+    /// What the atlas holds, plus what has been drawn since.
+    wanted: Set = .initEmpty(),
+    loaded: Set = .initEmpty(),
 
-fn collect(comptime ranges: []const [2]i32) [count(ranges)]i32 {
-    @setEvalBranchQuota(100_000);
-    var list: [count(ranges)]i32 = undefined;
-    var i = 0;
-    for (ranges) |r| {
-        var c = r[0];
-        while (c <= r[1]) : (c += 1) {
-            list[i] = c;
-            i += 1;
-        }
+    fn init(g: *Glyphs, font: []const u8, keep: *const fn (u21) bool) void {
+        var found: [max_glyphs]i32 = undefined;
+        for (cmap.codepoints(font, &found, keep)) |c| g.available.set(@intCast(c));
     }
-    return list;
+
+    fn has(g: Glyphs, c: u21) bool {
+        return c < codepoint_limit and g.available.isSet(c);
+    }
+
+    fn want(g: *Glyphs, c: u21) void {
+        if (g.has(c)) g.wanted.set(c);
+    }
+
+    fn stale(g: Glyphs) bool {
+        return !g.wanted.eql(g.loaded);
+    }
+
+    /// Everything wanted, marked as loaded.
+    fn take(g: *Glyphs, out: []i32) []i32 {
+        var n: usize = 0;
+        var it = g.wanted.iterator(.{});
+        while (it.next()) |c| {
+            if (n == out.len) break;
+            out[n] = @intCast(c);
+            n += 1;
+        }
+        g.loaded = g.wanted;
+        return out[0..n];
+    }
+};
+
+/// More than either font has.
+const max_glyphs = 4096;
+
+var text_glyphs: Glyphs = .{};
+/// Emoji are drawn from a second font, since the text font has none.
+/// `text.isWide` decides which font a character comes from.
+var emoji_glyphs: Glyphs = .{};
+var glyphs_ready = false;
+
+fn isEmoji(c: u21) bool {
+    return text.isWide(c);
 }
 
-fn count(comptime ranges: []const [2]i32) usize {
-    var total = 0;
-    for (ranges) |r| total += r[1] - r[0] + 1;
-    return total;
+fn anything(_: u21) bool {
+    return true;
+}
+
+fn prepareGlyphs() void {
+    if (glyphs_ready) return;
+    glyphs_ready = true;
+    text_glyphs.init(data, &anything);
+    emoji_glyphs.init(emoji_data, &isEmoji);
+    // Always in the atlas: ASCII and the accented letters of Latin-1.
+    for (0x20..0x7F) |c| text_glyphs.want(@intCast(c));
+    for (0xA0..0x100) |c| text_glyphs.want(@intCast(c));
 }
 
 /// Size of one character cell. The font is monospaced, so one measurement
@@ -94,18 +117,27 @@ pub const Font = struct {
 
     /// Rasterises the font at the current size. Safe to call repeatedly.
     pub fn load(f: *Self) !void {
+        prepareGlyphs();
+        var text_list: [max_glyphs]i32 = undefined;
+        var emoji_list: [max_glyphs]i32 = undefined;
+        const text_codepoints = text_glyphs.take(&text_list);
+        const emoji_codepoints = emoji_glyphs.take(&emoji_list);
+
         const size: i32 = @intFromFloat(@round(f.size * f.density));
-        const next = try pen.loadFontFromMemory(".ttf", data, size, codepoints);
+        const next = try pen.loadFontFromMemory(".ttf", data, size, text_codepoints);
         if (!pen.isFontValid(next)) return error.InvalidFont;
 
         // Emoji live in their own atlas rather than a merged one: raylib owns
         // the glyph arrays it allocates, and splicing Zig-allocated memory
         // into a Font would hand raylib a pointer it must not free.
+        // With no emoji wanted yet, one stands in: raylib reads an empty
+        // list as its default ASCII set.
+        const placeholder = [_]i32{0x263A};
         const next_emoji = try pen.loadFontFromMemory(
             ".ttf",
             emoji_data,
             @intFromFloat(@round(f.size * 2 * f.density)),
-            emoji_codepoints,
+            if (emoji_codepoints.len > 0) emoji_codepoints else &placeholder,
         );
 
         // raylib uploads a GPU texture per font, so the old ones must go.
@@ -140,6 +172,12 @@ pub const Font = struct {
         if (density <= 0 or density == f.density) return;
         f.density = density;
         if (f.loaded) try f.load();
+    }
+
+    /// Rebuilds the atlases when text has used characters they lack.
+    pub fn refresh(f: *Self) !void {
+        if (!f.loaded) return;
+        if (text_glyphs.stale() or emoji_glyphs.stale()) try f.load();
     }
 
     pub fn zoomIn(f: *Self) !void {
@@ -184,9 +222,13 @@ pub const Font = struct {
         while (i < s.len) {
             const at = text.decode(s, i);
             const where = pen.Vector2{ .x = x + @as(f32, @floatFromInt(column)) * f.metrics.width, .y = y };
-            if (text.isWide(at.code)) {
+            // The emoji font lacks some of the blocks it covers, such as the
+            // check marks, which the text font has.
+            if (text.isWide(at.code) and emoji_glyphs.has(at.code)) {
+                emoji_glyphs.want(at.code);
                 pen.drawTextCodepoint(f.emoji, @intCast(at.code), where, f.metrics.width * 2, colour);
             } else {
+                text_glyphs.want(at.code);
                 pen.drawTextCodepoint(f.handle, @intCast(at.code), where, f.size, colour);
             }
             column += text.columnsFor(at.code);
