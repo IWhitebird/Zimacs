@@ -145,13 +145,12 @@ pub fn run(start: Start) !void {
     const data_dir = try dataDir(start);
     defer if (data_dir) |d| gpa.free(d);
     if (data_dir) |d| if (io) |active_io| recent.load(active_io, d) catch {};
+    if (data_dir) |d| update.log.setDir(d);
 
     try openStartingBuffers(start, session_dir);
     if (config.problem) |problem| {
         commands.tell(.problem, "{s} line {d}: {s}", .{ config_mod.file_name, problem.line, problem.why });
     }
-
-    commands.updateInBackground();
 
     if (io) |active_io| idle.start(active_io);
     defer idle.stop();
@@ -167,6 +166,7 @@ pub fn run(start: Start) !void {
     while (!window.shouldClose()) {
         if (session_dir) |d| if (autosave.due(pen.getTime(), &buffer, currentExtras())) saveSession(d);
         if (disk_watch.due(pen.getTime())) commands.checkDisk();
+        if (update_schedule.due(pen.getTime(), &update)) commands.updateInBackground();
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
 
@@ -180,6 +180,7 @@ pub fn run(start: Start) !void {
 
 var autosave = session.Autosave{};
 var disk_watch = @import("core/buffer.zig").DiskWatch{};
+var update_schedule = update_mod.Schedule{};
 
 fn lastExtras(session_dir: ?[]const u8) session.Extras {
     const d = session_dir orelse return .{};

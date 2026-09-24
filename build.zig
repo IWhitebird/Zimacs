@@ -24,6 +24,8 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/update.zig", .raylib = false },
     .{ .path = "src/core/selfupdate.zig", .raylib = false },
     .{ .path = "src/core/https.zig", .raylib = false },
+    .{ .path = "src/core/cmap.zig", .raylib = false },
+    .{ .path = "src/core/updatelog.zig", .raylib = false },
     .{ .path = "src/core/menu.zig", .raylib = true },
     .{ .path = "src/core/titlebar.zig", .raylib = true },
     .{ .path = "src/core/native.zig", .raylib = true },

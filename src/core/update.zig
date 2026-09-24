@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const selfupdate = @import("selfupdate.zig");
 const https = @import("https.zig");
+const Log = @import("updatelog.zig").Log;
 
 pub const releases_url = "https://github.com/IWhitebird/Zimacs/releases";
 const api_url = "https://api.github.com/repos/IWhitebird/Zimacs/releases/latest";
@@ -89,6 +90,7 @@ pub const Update = struct {
     /// before the state that publishes it.
     problem: ?[:0]const u8 = null,
     announce: bool = true,
+    log: Log = .{},
 
     const Self = @This();
 
@@ -121,6 +123,7 @@ pub const Update = struct {
                 u.state.store(.up_to_date, .release);
                 return;
             }
+            u.log.write(gpa, io, "check failed: {s}", .{@errorName(err)});
             u.problem = @errorName(err);
             u.state.store(.failed, .release);
             return;
@@ -128,6 +131,7 @@ pub const Update = struct {
         // Written before the state that publishes it.
         u.latest = latest;
         if (!current.isOlderThan(latest)) {
+            u.log.write(gpa, io, "up to date: {d}.{d}.{d}", .{ current.major, current.minor, current.patch });
             u.state.store(.up_to_date, .release);
             return;
         }
@@ -138,12 +142,60 @@ pub const Update = struct {
 
         u.state.store(.downloading, .release);
         selfupdate.fetchAndInstall(gpa, io, latest) catch |err| {
+            u.log.write(gpa, io, "install {d}.{d}.{d} over {d}.{d}.{d} failed: {s}", .{
+                latest.major, latest.minor, latest.patch, current.major, current.minor, current.patch, @errorName(err),
+            });
             // Still worth telling the user it exists.
             u.problem = @errorName(err);
             u.state.store(.available, .release);
             return;
         };
+        u.log.write(gpa, io, "installed {d}.{d}.{d} over {d}.{d}.{d}", .{
+            latest.major, latest.minor, latest.patch, current.major, current.minor, current.patch,
+        });
         u.state.store(.installed, .release);
+    }
+
+    /// Whether the last check or install went wrong.
+    pub fn failed(u: *const Self) bool {
+        return switch (u.status()) {
+            .failed => true,
+            .available => u.problem != null,
+            else => false,
+        };
+    }
+};
+
+/// When the background check runs: at startup, again soon after a failure
+/// and less often each time, and every few hours while Zimacs stays open.
+pub const Schedule = struct {
+    next: f64 = 0,
+    failures: usize = 0,
+    /// A check it started has not been seen to finish.
+    started: bool = false,
+
+    const retry_seconds = [_]f64{ 60, 5 * 60, 15 * 60, 60 * 60 };
+    const recheck_seconds = 6 * 60 * 60;
+
+    /// True when a check should start now.
+    pub fn due(s: *Schedule, now: f64, u: *const Update) bool {
+        switch (u.status()) {
+            .checking, .downloading, .installed => return false,
+            else => {},
+        }
+        if (s.started) {
+            s.started = false;
+            if (u.failed()) {
+                s.next = now + retry_seconds[@min(s.failures, retry_seconds.len - 1)];
+                s.failures += 1;
+            } else {
+                s.next = now + recheck_seconds;
+                s.failures = 0;
+            }
+        }
+        if (now < s.next) return false;
+        s.started = true;
+        return true;
     }
 };
 
@@ -216,4 +268,43 @@ test "malformed json does not crash the check" {
     try testing.expect(tagFromJson(testing.allocator, "{}") == null);
     try testing.expect(tagFromJson(testing.allocator, "{\"tag_name\":42}") == null);
     try testing.expect(tagFromJson(testing.allocator, "[1,2,3]") == null);
+}
+
+test "the schedule checks at once, retries sooner after failures, and rechecks later" {
+    var u = Update{};
+    var s = Schedule{};
+    // Each check that is due starts at once, as `updateInBackground` does.
+    try testing.expect(s.due(0, &u));
+    u.state.store(.checking, .release);
+    try testing.expect(!s.due(10, &u));
+
+    u.state.store(.failed, .release);
+    try testing.expect(!s.due(10, &u));
+    try testing.expect(s.due(10 + 60, &u));
+    u.state.store(.checking, .release);
+
+    u.state.store(.failed, .release);
+    try testing.expect(!s.due(100, &u));
+    try testing.expect(!s.due(100 + 60, &u));
+    try testing.expect(s.due(100 + 5 * 60, &u));
+    u.state.store(.checking, .release);
+
+    u.state.store(.up_to_date, .release);
+    try testing.expect(!s.due(1000, &u));
+    try testing.expect(!s.due(1000 + 60 * 60, &u));
+    try testing.expect(s.due(1000 + 6 * 60 * 60, &u));
+}
+
+test "an update that did not install counts as a failure, one that did stops the schedule" {
+    var u = Update{};
+    var s = Schedule{};
+    try testing.expect(s.due(0, &u));
+    u.problem = "ReadFailed";
+    u.state.store(.available, .release);
+    try testing.expect(!s.due(1, &u));
+    try testing.expect(s.due(1 + 60, &u));
+
+    u.problem = null;
+    u.state.store(.installed, .release);
+    try testing.expect(!s.due(1_000_000, &u));
 }
