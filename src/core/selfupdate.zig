@@ -131,14 +131,49 @@ pub fn swap(io: std.Io, dir: std.Io.Dir, name: []const u8, binary: []const u8, s
             var old_buf: [256]u8 = undefined;
             const old = try siblingName(&old_buf, name, ".old");
             dir.deleteFile(io, old) catch {};
-            try dir.rename(name, dir, old, io);
+            try renameRunning(io, dir, name, old);
             dir.rename(staged, dir, name, io) catch |err| {
-                dir.rename(old, dir, name, io) catch {};
+                renameRunning(io, dir, old, name) catch {};
                 return err;
             };
         },
     }
 }
+
+/// Zig's rename opens the file for writing, which Windows refuses for a
+/// running executable. `MoveFileExW` asks only to delete it, which Windows
+/// allows.
+fn renameRunning(io: std.Io, dir: std.Io.Dir, from: []const u8, to: []const u8) !void {
+    if (builtin.os.tag != .windows) return dir.rename(from, dir, to, io);
+
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = dir_buf[0..try dir.realPath(io, &dir_buf)];
+    var from_w: [std.os.windows.PATH_MAX_WIDE:0]u16 = undefined;
+    var to_w: [std.os.windows.PATH_MAX_WIDE:0]u16 = undefined;
+    try widePath(&from_w, dir_path, from);
+    try widePath(&to_w, dir_path, to);
+
+    if (win32.MoveFileExW(&from_w, &to_w, win32.MOVEFILE_WRITE_THROUGH) != 0) return;
+    return switch (std.os.windows.GetLastError()) {
+        .ACCESS_DENIED => error.AccessDenied,
+        .SHARING_VIOLATION => error.FileBusy,
+        .FILE_NOT_FOUND => error.FileNotFound,
+        else => error.MoveFailed,
+    };
+}
+
+fn widePath(out: *[std.os.windows.PATH_MAX_WIDE:0]u16, dir_path: []const u8, name: []const u8) !void {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const joined = std.fmt.bufPrint(&buf, "{s}\\{s}", .{ dir_path, name }) catch return error.NoSpace;
+    const len = std.unicode.wtf8ToWtf16Le(out, joined) catch return error.BadPathName;
+    if (len >= out.len) return error.NoSpace;
+    out[len] = 0;
+}
+
+const win32 = struct {
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    extern "kernel32" fn MoveFileExW(existing: [*:0]const u16, new: [*:0]const u16, flags: u32) callconv(.winapi) c_int;
+};
 
 fn siblingName(buf: []u8, name: []const u8, suffix: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "{s}{s}", .{ name, suffix }) catch error.NoSpace;
