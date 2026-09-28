@@ -32,6 +32,11 @@ pub const Version = struct {
         return out;
     }
 
+    /// For `{f}`: `1.2.3`.
+    pub fn format(v: Version, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.print("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+    }
+
     /// True when `other` is a later release than `self`.
     pub fn isOlderThan(self: Version, other: Version) bool {
         if (self.major != other.major) return self.major < other.major;
@@ -100,6 +105,13 @@ pub const Update = struct {
         return u.state.load(.acquire);
     }
 
+    /// The state with what it publishes. The state is read first, so the
+    /// rest is what the worker wrote before setting it.
+    pub fn snapshot(u: *const Self) struct { state: State, latest: Version, problem: ?[:0]const u8 } {
+        const state = u.status();
+        return .{ .state = state, .latest = u.latest, .problem = u.problem };
+    }
+
     /// No-op on the web, or while one is running or installed.
     pub fn start(u: *Self, gpa: std.mem.Allocator, io: std.Io, current: Version, options: Options) void {
         if (builtin.os.tag == .emscripten) return;
@@ -134,7 +146,7 @@ pub const Update = struct {
         // Written before the state that publishes it.
         u.latest = latest;
         if (!current.isOlderThan(latest)) {
-            u.log.write(gpa, io, "up to date: {d}.{d}.{d}", .{ current.major, current.minor, current.patch });
+            u.log.write(gpa, io, "up to date: {f}", .{current});
             u.state.store(.up_to_date, .release);
             return;
         }
@@ -145,18 +157,14 @@ pub const Update = struct {
 
         u.state.store(.downloading, .release);
         selfupdate.fetchAndInstall(gpa, io, latest) catch |err| {
-            u.log.write(gpa, io, "install {d}.{d}.{d} over {d}.{d}.{d} failed: {s}", .{
-                latest.major, latest.minor, latest.patch, current.major, current.minor, current.patch, @errorName(err),
-            });
+            u.log.write(gpa, io, "install {f} over {f} failed: {s}", .{ latest, current, @errorName(err) });
             // Still worth telling the user it exists.
             u.problem = @errorName(err);
             u.lasting = selfupdate.isPermanent(err);
             u.state.store(.available, .release);
             return;
         };
-        u.log.write(gpa, io, "installed {d}.{d}.{d} over {d}.{d}.{d}", .{
-            latest.major, latest.minor, latest.patch, current.major, current.minor, current.patch,
-        });
+        u.log.write(gpa, io, "installed {f} over {f}", .{ latest, current });
         u.state.store(.installed, .release);
     }
 

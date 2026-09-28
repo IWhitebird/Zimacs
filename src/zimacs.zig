@@ -118,7 +118,7 @@ pub fn run(start: Start) !void {
     defer find.deinit();
     defer if (config_path) |p| gpa.free(p);
 
-    loadConfig(start);
+    const config_failure = loadConfig(start);
     theme.apply(config.colors);
 
     // Before the window opens, so it opens at the saved size and zoom.
@@ -138,10 +138,16 @@ pub fn run(start: Start) !void {
         input.artifact(),
     });
 
-    for (artifacts.items) |a| try a.init();
-    defer for (artifacts.items) |a| {
-        a.deinit() catch {};
+    // Torn down in reverse, and only those that started.
+    var started: usize = 0;
+    defer while (started > 0) {
+        started -= 1;
+        artifacts.items[started].deinit();
     };
+    for (artifacts.items) |a| {
+        try a.init();
+        started += 1;
+    }
 
     // After the window exists, because the glyph atlas is a GPU texture, and
     // released before the window closes for the same reason.
@@ -160,12 +166,14 @@ pub fn run(start: Start) !void {
     };
 
     try openStartingBuffers(start, session_dir);
+    if (config_failure) |err| commands.report("Could not read " ++ config_mod.file_name, err);
     if (config.problem) |problem| {
         commands.tell(.problem, "{s} line {d}: {s}", .{ config_mod.file_name, problem.line, problem.why });
     }
     if (crashed_last_time) commands.tell(.problem, "Zimacs crashed last time. Help > Report a Problem sends the details.", .{});
 
     if (io) |active_io| if (start.env) |env| file_dialog.setUp(active_io, env);
+    defer file_dialog.close();
     commands.removeUpdateLeftovers();
     if (io) |active_io| idle.start(active_io);
     defer idle.stop();
@@ -284,22 +292,26 @@ pub fn openFile(path: []const u8) !void {
     if (buffer.current()) |view| if (view.path) |stored| recent.add(stored) catch {};
 }
 
-fn loadConfig(start: Start) void {
-    const active_io = start.io orelse return;
-    const env = start.env orelse return;
-    const dir = paths.configDir(gpa, env) catch return orelse return;
+/// The settings file, read into `config`. Returns why it could not be read,
+/// other than not existing yet.
+fn loadConfig(start: Start) ?anyerror {
+    const active_io = start.io orelse return null;
+    const env = start.env orelse return null;
+    const dir = (paths.configDir(gpa, env) catch |err| return err) orelse return null;
     defer gpa.free(dir);
 
-    const file = std.fs.path.join(gpa, &.{ dir, config_mod.file_name }) catch return;
+    const file = std.fs.path.join(gpa, &.{ dir, config_mod.file_name }) catch |err| return err;
     config_path = file;
 
-    const text = std.Io.Dir.cwd().readFileAlloc(active_io, file, gpa, .limited(config_mod.max_bytes)) catch {
+    const text = std.Io.Dir.cwd().readFileAlloc(active_io, file, gpa, .limited(config_mod.max_bytes)) catch |err| {
+        if (err != error.FileNotFound) return err;
         // No config yet: leave one behind so it is easy to find and edit.
         config_mod.Config.writeDefault(active_io, dir) catch {};
-        return;
+        return null;
     };
     defer gpa.free(text);
     config.applyText(text);
+    return null;
 }
 
 fn sessionDir(start: Start) !?[]u8 {

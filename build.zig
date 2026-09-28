@@ -171,13 +171,16 @@ const Grammar = struct {
     scanner: bool,
     /// Also built into the web demo, which shows a C file.
     web: bool = false,
+    /// Its highlight query is written for Neovim, where a later pattern
+    /// overrides an earlier one for the same node rather than the reverse.
+    overrides: bool = false,
 };
 
 /// C++ and TypeScript are left out for now: their grammars are several
 /// megabytes each.
 const grammars = [_]Grammar{
     .{ .name = "c", .package = "ts_c", .scanner = false, .web = true },
-    .{ .name = "zig", .package = "ts_zig", .scanner = false },
+    .{ .name = "zig", .package = "ts_zig", .scanner = false, .overrides = true },
     .{ .name = "json", .package = "ts_json", .scanner = false },
     .{ .name = "python", .package = "ts_python", .scanner = true },
     .{ .name = "javascript", .package = "ts_javascript", .scanner = true },
@@ -187,8 +190,8 @@ const grammars = [_]Grammar{
     .{ .name = "bash", .package = "ts_bash", .scanner = true },
     .{ .name = "html", .package = "ts_html", .scanner = true },
     .{ .name = "css", .package = "ts_css", .scanner = true },
-    .{ .name = "toml", .package = "ts_toml", .scanner = true },
-    .{ .name = "yaml", .package = "ts_yaml", .scanner = true },
+    .{ .name = "toml", .package = "ts_toml", .scanner = true, .overrides = true },
+    .{ .name = "yaml", .package = "ts_yaml", .scanner = true, .overrides = true },
 };
 
 /// Tree-sitter and the grammars, compiled into `module`, with each
@@ -210,6 +213,7 @@ fn addSyntax(b: *std.Build, module: *std.Build.Module, web: bool) void {
     });
 
     var names: std.ArrayList([]const u8) = .empty;
+    var overrides: std.ArrayList(bool) = .empty;
     for (grammars) |g| {
         if (web and !g.web) continue;
         const dep = b.dependency(g.package, .{});
@@ -219,9 +223,11 @@ fn addSyntax(b: *std.Build, module: *std.Build.Module, web: bool) void {
             .root_source_file = dep.path("queries/highlights.scm"),
         });
         names.append(b.allocator, g.name) catch @panic("OOM");
+        overrides.append(b.allocator, g.overrides) catch @panic("OOM");
     }
     const options = b.addOptions();
     options.addOption([]const []const u8, "names", names.items);
+    options.addOption([]const bool, "overrides", overrides.items);
     module.addOptions("grammars", options);
 }
 

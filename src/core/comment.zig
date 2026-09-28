@@ -94,7 +94,10 @@ fn rewriteBlocks(gpa: std.mem.Allocator, lines: []const u8, open: []const u8, cl
     while (it.next()) |line| {
         const body = std.mem.trim(u8, line, " \t");
         if (body.len == 0) continue;
-        if (!std.mem.startsWith(u8, body, open) or !std.mem.endsWith(u8, body, close)) all_commented = false;
+        // `<!--->` both starts and ends a comment but holds none.
+        const wrapped = body.len >= open.len + close.len and
+            std.mem.startsWith(u8, body, open) and std.mem.endsWith(u8, body, close);
+        if (!wrapped) all_commented = false;
     }
 
     it = std.mem.splitScalar(u8, lines, '\n');
@@ -107,7 +110,7 @@ fn rewriteBlocks(gpa: std.mem.Allocator, lines: []const u8, open: []const u8, cl
             try out.appendSlice(gpa, line);
             continue;
         }
-        const indent = line[0..std.mem.indexOf(u8, line, body).?];
+        const indent = line[0 .. line.len - std.mem.trimStart(u8, line, " \t").len];
         try out.appendSlice(gpa, indent);
         if (all_commented) {
             const inner = std.mem.trim(u8, body[open.len .. body.len - close.len], " ");
@@ -149,10 +152,15 @@ test "block-only languages wrap each line, and unwrap it again" {
     try expectRewrite("a.html", "<p>hi</p>", "<!-- <p>hi</p> -->");
 }
 
+test "markers that overlap are not taken for a wrapped line" {
+    try expectRewrite("a.html", "<!--->", "<!-- <!---> -->");
+    try expectRewrite("a.css", "/*/", "/* /*/ */");
+}
+
 test "the caret keeps its place on the line" {
     const Buffer = @import("buffer.zig").Buffer;
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newFilled("x.zig", "  const a = 1;\nnext");
     v.cursor.moveTo(&v.tree, 8, false);
     try testing.expect(try toggle(v, language.detect("x.zig")));

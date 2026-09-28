@@ -66,7 +66,8 @@ fn getOnce(gpa: std.mem.Allocator, io: std.Io, url: []const u8, headers: []const
     const reader = response.readerDecompressing(&transfer, &decompress, window);
 
     const body = reader.allocRemaining(gpa, .limited(limit)) catch |err| switch (err) {
-        error.ReadFailed => return response.bodyErr().?,
+        // A connection dropped mid-body fails the read with no body error.
+        error.ReadFailed => return response.bodyErr() orelse error.ReadFailed,
         error.StreamTooLong => return error.TooLarge,
         else => |e| return e,
     };

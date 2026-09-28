@@ -33,6 +33,9 @@ pub const Dialog = struct {
     /// Written before `state` becomes `done`.
     path: ?[]u8 = null,
     tool: ?Tool = null,
+    /// The Linux tool's process while it runs, 0 otherwise, so closing the
+    /// editor can close the dialog too.
+    child: std.atomic.Value(i32) = .init(0),
 
     const State = enum(u8) { idle, showing, done };
 
@@ -55,15 +58,21 @@ pub const Dialog = struct {
         return d.state.load(.acquire) == .showing;
     }
 
-    /// False when the system has no dialog to show, so the caller should
-    /// use the built-in browser. A dialog already open is left to finish.
-    pub fn show(d: *Dialog, gpa: std.mem.Allocator, io: ?std.Io, req: Request) bool {
-        if (d.showing()) return true;
-        const active_io = io orelse return false;
+    pub const Shown = enum {
+        shown,
+        /// Another dialog is still open, and is left to finish.
+        busy,
+        /// The system has none, so the caller uses the built-in browser.
+        unavailable,
+    };
+
+    pub fn show(d: *Dialog, gpa: std.mem.Allocator, io: ?std.Io, req: Request) Shown {
+        if (d.showing()) return .busy;
+        const active_io = io orelse return .unavailable;
         // GTK starts a relative folder one level up, with it selected.
-        const here = std.process.currentPathAlloc(active_io, gpa) catch return false;
+        const here = std.process.currentPathAlloc(active_io, gpa) catch return .unavailable;
         defer gpa.free(here);
-        const dir = std.fs.path.resolve(gpa, &.{ here, req.dir }) catch return false;
+        const dir = std.fs.path.resolve(gpa, &.{ here, req.dir }) catch return .unavailable;
         defer gpa.free(dir);
         var absolute = req;
         absolute.dir = dir;
@@ -73,22 +82,22 @@ pub const Dialog = struct {
                 d.kind = req.kind;
                 d.path = win32.pick(gpa, absolute) catch null;
                 d.state.store(.done, .release);
-                return true;
+                return .shown;
             },
             .linux => {
-                const tool = d.tool orelse return false;
-                const argv = arguments(gpa, tool, absolute) catch return false;
+                const tool = d.tool orelse return .unavailable;
+                const argv = arguments(gpa, tool, absolute) catch return .unavailable;
                 d.kind = req.kind;
                 d.state.store(.showing, .release);
                 const thread = std.Thread.spawn(.{}, run, .{ d, gpa, active_io, argv }) catch {
                     freeArguments(gpa, argv);
                     d.state.store(.idle, .release);
-                    return false;
+                    return .unavailable;
                 };
                 thread.detach();
-                return true;
+                return .shown;
             },
-            else => return false,
+            else => return .unavailable,
         }
     }
 
@@ -101,11 +110,40 @@ pub const Dialog = struct {
         return outcome;
     }
 
+    /// Ends a dialog still open, which would otherwise outlive the editor.
+    pub fn close(d: *Dialog) void {
+        if (builtin.os.tag != .linux) return;
+        const pid = d.child.load(.acquire);
+        if (pid != 0) std.posix.kill(pid, .TERM) catch {};
+    }
+
     fn run(d: *Dialog, gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) void {
         defer freeArguments(gpa, argv);
-        d.path = runTool(gpa, io, argv) catch null;
+        d.path = d.runTool(gpa, io, argv) catch null;
         d.state.store(.done, .release);
         wake();
+    }
+
+    fn runTool(d: *Dialog, gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
+        var child = try std.process.spawn(io, .{ .argv = argv, .stdin = .ignore, .stdout = .pipe, .stderr = .ignore });
+        d.child.store(child.id.?, .release);
+        defer d.child.store(0, .release);
+
+        var buf: [256]u8 = undefined;
+        var reader = child.stdout.?.reader(io, &buf);
+        const out = reader.interface.allocRemaining(gpa, .limited(std.Io.Dir.max_path_bytes)) catch |err| {
+            child.kill(io);
+            return err;
+        };
+        defer gpa.free(out);
+        // Both tools exit with 1 on cancel; anything but 0 is not a choice.
+        const chosen = switch (try child.wait(io)) {
+            .exited => |code| code == 0,
+            else => false,
+        };
+        const path = std.mem.trimEnd(u8, out, "\r\n");
+        if (!chosen or path.len == 0) return null;
+        return try gpa.dupe(u8, path);
     }
 };
 
@@ -114,20 +152,6 @@ extern fn glfwPostEmptyEvent() void;
 /// The editor may be waiting for an event; this is one.
 fn wake() void {
     if (builtin.os.tag != .emscripten) glfwPostEmptyEvent();
-}
-
-fn runTool(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
-    const result = try std.process.run(gpa, io, .{ .argv = argv });
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-    // Both tools exit with 1 on cancel; anything but 0 is not a choice.
-    const chosen = switch (result.term) {
-        .exited => |code| code == 0,
-        else => false,
-    };
-    const path = std.mem.trimEnd(u8, result.stdout, "\r\n");
-    if (!chosen or path.len == 0) return null;
-    return try gpa.dupe(u8, path);
 }
 
 /// The command line for `tool`. Caller frees with `freeArguments`.

@@ -56,7 +56,12 @@ pub const Browser = struct {
         var it = dir.iterate();
         while (try it.next(io)) |entry| {
             if (!show_hidden and entry.name.len > 0 and entry.name[0] == '.') continue;
-            const is_dir = entry.kind == .directory;
+            // A link to a directory is listed as one, so it can be entered.
+            const is_dir = switch (entry.kind) {
+                .directory => true,
+                .sym_link => if (dir.statFile(io, entry.name, .{})) |st| st.kind == .directory else |_| false,
+                else => false,
+            };
             const name = if (is_dir)
                 try std.fmt.allocPrint(b.gpa, "{s}/", .{entry.name})
             else
@@ -181,6 +186,24 @@ test "reading a real directory lists it with .. first" {
         if (std.mem.eql(u8, name, "browser.zig")) seen += 1;
     }
     try testing.expectEqual(@as(usize, 1), seen);
+}
+
+test "a link to a directory is listed as a directory" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "real");
+    try tmp.dir.symLink(io, "real", "link", .{ .is_directory = true });
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+
+    var b = Browser{ .gpa = gpa };
+    defer b.deinit();
+    try b.show(io, path, false);
+    var found = false;
+    for (b.items()) |name| found = found or std.mem.eql(u8, name, "link/");
+    try testing.expect(found);
 }
 
 test "a relative directory is stored absolutely, so stepping up works" {

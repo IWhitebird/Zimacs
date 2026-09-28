@@ -21,6 +21,7 @@ const typing = @import("typing.zig");
 const wrap = @import("wrap.zig");
 const language = @import("language.zig");
 const browser_mod = @import("browser.zig");
+const config_mod = @import("config.zig");
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
@@ -58,7 +59,7 @@ pub const Input = struct {
         _ = ctx;
     }
 
-    pub fn deinit(ctx: *anyopaque) !void {
+    pub fn deinit(ctx: *anyopaque) void {
         _ = ctx;
     }
 
@@ -317,6 +318,9 @@ fn handleMenu() !bool {
             // Sliding across the bar with one menu open opens the next, the
             // way every desktop menu behaves.
             app.menu.open = index;
+        } else {
+            // Only hovering: the keyboard still belongs to the text.
+            return false;
         }
         return true;
     }
@@ -350,26 +354,16 @@ fn shiftDown() bool {
     return pen.isKeyDown(.left_shift) or pen.isKeyDown(.right_shift);
 }
 
+/// Only the left Alt: the right one is AltGr on many layouts, where it types
+/// characters such as @, { and ż rather than starting a shortcut.
 fn altDown() bool {
-    return pen.isKeyDown(.left_alt) or pen.isKeyDown(.right_alt);
+    return pen.isKeyDown(.left_alt);
 }
 
-/// Whether typed characters belong to a shortcut instead. The right Alt is
-/// AltGr on many layouts, where it types characters such as @ and {, so only
-/// the left Alt counts. The browser passes Alt+letter on as the letter.
+/// Whether typed characters belong to a shortcut instead. The browser passes
+/// Alt+letter on as the letter.
 fn shortcutHeld() bool {
-    return ctrlDown() or pen.isKeyDown(.left_alt);
-}
-
-/// The widest indentation unit `tab_width` can ask for.
-const max_indent_unit = 16;
-
-/// What one level of indentation is made of: a tab, or `tab_width` spaces.
-fn indentUnit(buf: *[max_indent_unit]u8) []const u8 {
-    if (!app.config.expand_tabs) return "\t";
-    const width = @min(app.config.tab_width, buf.len);
-    @memset(buf[0..width], ' ');
-    return buf[0..width];
+    return ctrlDown() or altDown();
 }
 
 /// One screen of lines, minus one so you keep your place while reading.
@@ -380,15 +374,16 @@ fn pageRows() u32 {
 
 // ------------------------------------------------------------- movement
 
-/// The column along the row that Up and Down aim for while lines are folded,
-/// kept while the caret is where the last such move left it.
+/// The screen column along the row that Up and Down aim for, kept while the
+/// caret is where the last such move left it.
 var row_goal: ?struct { offset: u32, column: u32 } = null;
 
-/// Up and Down while lines are folded: to the screen row above or below,
-/// which may be part of the same line.
+/// Up and Down: to the screen row above or below, which may be part of the
+/// same line while lines are folded. Aiming at a screen column keeps the
+/// caret in place across tabs and wide characters.
 fn moveRow(view: *BufferView, direction: enum { up, down }, extend: bool) void {
-    const l = editor.currentLayout();
-    const fold = editor.foldFor(l, app.font.metrics);
+    const unfolded = wrap.Fold{ .width = 0, .tab = app.config.tab_width };
+    const fold = if (app.config.wrap_lines) editor.foldFor(editor.currentLayout(), app.font.metrics) else unfolded;
     const tree = &view.tree;
     const at = view.cursor.position(tree);
 
@@ -434,12 +429,10 @@ fn moveCursor() void {
 
     if (pressed(.left)) if (ctrl) cursor.wordLeft(tree, extend) else cursor.left(tree, extend);
     if (pressed(.right)) if (ctrl) cursor.wordRight(tree, extend) else cursor.right(tree, extend);
-    if (app.config.wrap_lines) {
+    // With Alt they move the line instead.
+    if (!altDown()) {
         if (pressed(.up)) moveRow(view, .up, extend);
         if (pressed(.down)) moveRow(view, .down, extend);
-    } else {
-        if (pressed(.up)) cursor.up(tree, extend);
-        if (pressed(.down)) cursor.down(tree, extend);
     }
 
     if (pressed(.home)) {
@@ -465,8 +458,8 @@ fn typeText() !void {
 
     // Brackets and quotes pair up only in code, and only if wanted.
     const lang = if (app.config.auto_close) view.language else &language.plain;
-    var unit_buf: [max_indent_unit]u8 = undefined;
-    const unit = indentUnit(&unit_buf);
+    var unit_buf: [config_mod.max_indent_unit]u8 = undefined;
+    const unit = app.config.indentUnit(&unit_buf);
 
     // The OS has already decoded these, so any keyboard layout, shift state
     // or dead key produces the right character without us mapping keys.
@@ -675,6 +668,8 @@ fn beginGutterClick(point: pen.Vector2, l: layout_mod.Layout) void {
     const view = app.buffer.current() orelse return;
     view.cursor.moveTo(&view.tree, offsetAt(view, point, l), shiftDown());
     view.cursor.selectLine(&view.tree);
+    press_point = point;
+    drag_started = false;
     dragging = true;
 }
 
@@ -823,7 +818,10 @@ fn runPrompt() !void {
             return;
         }
     }
-    if (pressed(.escape)) app.prompt.cancel();
+    if (pressed(.escape)) {
+        if (app.prompt.kind == .save_as or app.prompt.kind == .save_into) commands.cancelSave();
+        app.prompt.cancel();
+    }
     if (pressed(.enter) or pressed(.kp_enter)) try commitPrompt();
 }
 

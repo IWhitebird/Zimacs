@@ -31,6 +31,8 @@ const Grammar = struct {
     name: []const u8,
     language: *const fn () callconv(.c) *const ts.Language,
     highlights: []const u8,
+    /// Where several patterns capture one node, the last wins, not the first.
+    overrides: bool,
     /// The highlight query, compiled the first time a file needs it.
     compiled: ?Compiled = null,
 };
@@ -41,12 +43,14 @@ var grammars = blk: {
         .name = name,
         .language = @extern(*const fn () callconv(.c) *const ts.Language, .{ .name = "tree_sitter_" ++ name }),
         .highlights = @embedFile("highlights_" ++ name),
+        .overrides = built_in.overrides[i],
     };
     break :blk list;
 };
 
 const Compiled = struct {
     query: *ts.Query,
+    overrides: bool,
     /// By capture id.
     kinds: []Kind,
     /// By pattern index.
@@ -85,7 +89,7 @@ fn grammarIndex(lang: *const Language) ?usize {
 
 pub const Syntax = struct {
     gpa: std.mem.Allocator,
-    grammar: usize,
+    query: *const Compiled,
     parser: *ts.Parser,
     cursor: *ts.QueryCursor,
     tree: ?*ts.Tree = null,
@@ -94,12 +98,14 @@ pub const Syntax = struct {
     /// A parse stopped partway and the next `step` carries it on.
     resuming: bool = false,
     spans: std.ArrayList(Span) = .empty,
-    /// The nodes one `highlights` call has coloured, by start and end.
-    seen: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// The nodes one `highlights` call has coloured, by start and end, to
+    /// their place in `spans`.
+    seen: std.AutoHashMapUnmanaged(u64, u32) = .empty,
 
     /// Null for a language no built-in grammar covers.
     pub fn create(gpa: std.mem.Allocator, lang: *const Language) ?*Syntax {
         const index = grammarIndex(lang) orelse return null;
+        const q = query(index) orelse return null;
         const parser = ts.ts_parser_new() orelse return null;
         if (!ts.ts_parser_set_language(parser, grammars[index].language())) {
             ts.ts_parser_delete(parser);
@@ -114,7 +120,7 @@ pub const Syntax = struct {
             ts.ts_parser_delete(parser);
             return null;
         };
-        s.* = .{ .gpa = gpa, .grammar = index, .parser = parser, .cursor = cursor };
+        s.* = .{ .gpa = gpa, .query = q, .parser = parser, .cursor = cursor };
         return s;
     }
 
@@ -160,7 +166,7 @@ pub const Syntax = struct {
         s.spans.clearRetainingCapacity();
         s.seen.clearRetainingCapacity();
         const tree = s.tree orelse return s.spans.items;
-        const q = query(s.grammar) orelse return s.spans.items;
+        const q = s.query;
 
         _ = ts.ts_query_cursor_set_byte_range(s.cursor, start, end);
         ts.ts_query_cursor_exec(s.cursor, q.query, ts.ts_tree_root_node(tree));
@@ -170,18 +176,31 @@ pub const Syntax = struct {
             const capture = match.captures[index];
             const kind = q.kinds[capture.index];
             if (kind == .none) continue;
-            if (!holds(q.predicates[match.pattern_index], match, text)) continue;
             const from = ts.ts_node_start_byte(capture.node);
             const to = ts.ts_node_end_byte(capture.node);
-            // Where several patterns name the same node, the first wins.
             const node_key = (@as(u64, from) << 32) | to;
-            const entry = s.seen.getOrPut(s.gpa, node_key) catch continue;
-            if (entry.found_existing) continue;
+            const earlier = s.seen.get(node_key);
+            // Where several patterns name the same node, the grammar says
+            // whether the first or the last one wins.
+            if (earlier != null and !q.overrides) continue;
+            if (!holds(q.predicates[match.pattern_index], match, text)) continue;
+            if (earlier) |i| {
+                s.spans.items[i].kind = kind;
+                continue;
+            }
+            s.seen.put(s.gpa, node_key, @intCast(s.spans.items.len)) catch continue;
             s.spans.append(s.gpa, .{ .start = from, .end = to, .kind = kind }) catch break;
         }
+        // Captures come by start, then by pattern, so a node that starts
+        // where its parent does can come first; outer ones go first.
+        std.mem.sort(Span, s.spans.items, {}, outerFirst);
         return s.spans.items;
     }
 };
+
+fn outerFirst(_: void, a: Span, b: Span) bool {
+    return a.start < b.start or (a.start == b.start and a.end > b.end);
+}
 
 /// Stops a parse once it has read a slice of new text.
 const Progress = struct {
@@ -222,7 +241,7 @@ fn compile(gpa: std.mem.Allocator, g: *const Grammar) !Compiled {
 
     const patterns = try gpa.alloc([]const Predicate, ts.ts_query_pattern_count(q));
     for (patterns, 0..) |*p, pattern| p.* = try predicatesOf(gpa, q, @intCast(pattern));
-    return .{ .query = q, .kinds = kinds, .predicates = patterns };
+    return .{ .query = q, .overrides = g.overrides, .kinds = kinds, .predicates = patterns };
 }
 
 fn stringFor(q: *const ts.Query, id: u32, what: enum { capture, string }) []const u8 {
@@ -238,7 +257,8 @@ fn stringFor(q: *const ts.Query, id: u32, what: enum { capture, string }) []cons
 /// no condition and are skipped.
 fn predicatesOf(gpa: std.mem.Allocator, q: *const ts.Query, pattern: u32) ![]const Predicate {
     var count: u32 = 0;
-    const steps = ts.ts_query_predicates_for_pattern(q, pattern, &count)[0..count];
+    const found = ts.ts_query_predicates_for_pattern(q, pattern, &count) orelse return &.{};
+    const steps = found[0..count];
     var list: std.ArrayList(Predicate) = .empty;
     errdefer list.deinit(gpa);
 
@@ -431,4 +451,46 @@ test "a large file parses a slice at a time" {
 test "languages without a built-in grammar get no highlighter" {
     try testing.expect(Syntax.create(testing.allocator, &language.plain) == null);
     try testing.expect(Syntax.create(testing.allocator, language.detect("notes.md")) == null);
+}
+
+fn kindAt(s: *Syntax, text: *const PieceTree, src: []const u8, word: []const u8) ?Kind {
+    const at: u32 = @intCast(std.mem.indexOf(u8, src, word).?);
+    var found: ?Kind = null;
+    for (s.highlights(text, 0, text.len())) |sp| {
+        if (sp.start <= at and at + word.len <= sp.end) found = sp.kind;
+    }
+    return found;
+}
+
+test "a query written for Neovim lets the later, more specific pattern win" {
+    const src = "const std = @import(\"std\");\nfn f() void {\n    std.debug.print(\"x\", .{});\n}\n";
+    var text = try PieceTree.initFromBytes(testing.allocator, src);
+    defer text.deinit();
+    const s = Syntax.create(testing.allocator, language.detect("x.zig")).?;
+    defer s.destroy();
+    while (s.step(&text)) {}
+    try testing.expectEqual(Kind.function, kindAt(s, &text, src, "print").?);
+}
+
+test "a YAML key is not coloured as the string it is written as" {
+    const src = "name: CI\non: [push]\n";
+    var text = try PieceTree.initFromBytes(testing.allocator, src);
+    defer text.deinit();
+    const s = Syntax.create(testing.allocator, language.detect("x.yml")).?;
+    defer s.destroy();
+    while (s.step(&text)) {}
+    try testing.expect(kindAt(s, &text, src, "name").? != .string);
+}
+
+test "spans that start together come outermost first" {
+    const src = "int main(void) { return 0; }\n";
+    var text = try PieceTree.initFromBytes(testing.allocator, src);
+    defer text.deinit();
+    const s = Syntax.create(testing.allocator, language.detect("x.c")).?;
+    defer s.destroy();
+    while (s.step(&text)) {}
+    const spans = s.highlights(&text, 0, text.len());
+    for (spans[1..], spans[0 .. spans.len - 1]) |b, a| {
+        try testing.expect(a.start < b.start or (a.start == b.start and a.end >= b.end));
+    }
 }

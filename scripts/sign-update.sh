@@ -20,6 +20,13 @@ platform=$3
 version=$4
 root=$(cd "$(dirname "$0")/.." && pwd)
 
+# Installed copies rebuild the suffix from the three numbers alone, so a
+# version with anything more would carry a signature they all turn down.
+printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+  printf 'error: VERSION must be X.Y.Z, not %s\n' "$version" >&2
+  exit 2
+}
+
 [ -n "${ZIMACS_SIGNING_KEY:-}" ] || {
   printf 'error: ZIMACS_SIGNING_KEY is not set\n' >&2
   exit 1

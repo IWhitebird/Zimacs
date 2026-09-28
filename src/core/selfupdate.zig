@@ -41,9 +41,7 @@ pub fn fetchAndInstall(gpa: std.mem.Allocator, io: std.Io, version: Version) !vo
     var name_buf: [64]u8 = undefined;
     const asset = try assetName(&name_buf, plat);
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/v{d}.{d}.{d}/{s}", .{
-        release_base, version.major, version.minor, version.patch, asset,
-    }) catch return error.NoSpace;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/v{f}/{s}", .{ release_base, version, asset }) catch return error.NoSpace;
     var sig_url_buf: [260]u8 = undefined;
     const sig_url = std.fmt.bufPrint(&sig_url_buf, "{s}.sig", .{url}) catch return error.NoSpace;
 
@@ -102,9 +100,7 @@ pub fn assetName(buf: []u8, plat: []const u8) ![]const u8 {
 
 /// Must match what `scripts/sign-update.sh` appends.
 pub fn signedSuffix(buf: []u8, version: Version, plat: []const u8) ![]const u8 {
-    return std.fmt.bufPrint(buf, "\nzimacs-update:{d}.{d}.{d}:{s}", .{
-        version.major, version.minor, version.patch, plat,
-    }) catch error.NoSpace;
+    return std.fmt.bufPrint(buf, "\nzimacs-update:{f}:{s}", .{ version, plat }) catch error.NoSpace;
 }
 
 pub fn verify(binary: []const u8, signature: []const u8, version: Version, plat: []const u8, key: [32]u8) Error!void {

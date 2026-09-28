@@ -1,9 +1,10 @@
 //! Restores the editor as it was left: tabs with unsaved text, cursors,
 //! selections, scroll, zoom and window placement.
 //!
-//! Stored as an `index` file plus one text file per unsaved buffer. Files
-//! are written to a temporary name and renamed, so an interrupted save
-//! leaves the previous session intact.
+//! Stored as an `index` file plus one text file per unsaved buffer. Each
+//! save names its text files with a mark of its own and renames the index
+//! into place last, so an interrupted save leaves the previous session
+//! whole: its index still names only its own texts.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -19,7 +20,8 @@ pub const dir_name = "session";
 const index_name = "index";
 const header_v1 = "zimacs-session 1";
 const header_v2 = "zimacs-session 2";
-const header = "zimacs-session 3";
+const header_v3 = "zimacs-session 3";
+const header = "zimacs-session 4";
 const max_index_bytes = 4 * 1024 * 1024;
 
 /// Window position and size in window-system units. The rectangle is the
@@ -57,8 +59,9 @@ pub const Autosave = struct {
 
 pub fn save(b: *Buffer, extras: Extras, io: std.Io, gpa: Allocator, dir: []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(io, dir);
-    var open = try std.Io.Dir.cwd().openDir(io, dir, .{});
+    var open = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
     defer open.close(io);
+    const mark = signature(b, extras);
 
     var index: std.ArrayList(u8) = .empty;
     defer index.deinit(gpa);
@@ -67,6 +70,7 @@ pub fn save(b: *Buffer, extras: Extras, io: std.Io, gpa: Allocator, dir: []const
     try index.append(gpa, '\n');
     try appendLine(&index, gpa, "active\t{d}", .{b.active});
     try appendLine(&index, gpa, "zoom\t{d}", .{extras.zoom});
+    try appendLine(&index, gpa, "texts\t{x}", .{mark});
     if (extras.window) |w| {
         try appendLine(&index, gpa, "window\t{d}\t{d}\t{d}\t{d}\t{d}", .{
             w.x, w.y, w.width, w.height, @intFromBool(w.maximized),
@@ -104,12 +108,34 @@ pub fn save(b: *Buffer, extras: Extras, io: std.Io, gpa: Allocator, dir: []const
         const text = try view.tree.allocText(gpa);
         defer gpa.free(text);
 
-        var name_buf: [32]u8 = undefined;
-        const file = try std.fmt.bufPrint(&name_buf, "{d}.txt", .{i});
-        try writeAtomic(open, io, file, text);
+        var name_buf: [max_text_name]u8 = undefined;
+        try writeAtomic(open, io, try textName(&name_buf, mark, i), text);
     }
 
     try writeAtomic(open, io, index_name, index.items);
+    removeOtherTexts(open, io, mark);
+}
+
+const text_suffix = ".txt";
+const max_text_name = 48;
+
+/// A tab's text file: `N.txt` before saves were marked, `MARK-N.txt` since.
+fn textName(buf: []u8, mark: ?u64, index: usize) ![]const u8 {
+    if (mark) |m| return std.fmt.bufPrint(buf, "{x}-{d}" ++ text_suffix, .{ m, index });
+    return std.fmt.bufPrint(buf, "{d}" ++ text_suffix, .{index});
+}
+
+/// Texts of earlier saves, and of tabs since closed, which should not
+/// linger on disk. Best effort: one left behind is only clutter.
+fn removeOtherTexts(dir: std.Io.Dir, io: std.Io, mark: u64) void {
+    var prefix_buf: [max_text_name]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&prefix_buf, "{x}-", .{mark}) catch return;
+    var it = dir.iterate();
+    while (it.next(io) catch return) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, text_suffix)) continue;
+        if (std.mem.startsWith(u8, entry.name, prefix)) continue;
+        dir.deleteFile(io, entry.name) catch {};
+    }
 }
 
 /// Returns false when there is nothing to restore.
@@ -125,6 +151,7 @@ pub fn restore(b: *Buffer, io: std.Io, gpa: Allocator, dir: []const u8) !bool {
 
     var active: usize = 0;
     var restored: usize = 0;
+    var mark: ?u64 = null;
 
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, "\r");
@@ -137,10 +164,14 @@ pub fn restore(b: *Buffer, io: std.Io, gpa: Allocator, dir: []const u8) !bool {
             active = std.fmt.parseInt(usize, parts.next() orelse "0", 10) catch 0;
             continue;
         }
+        if (std.mem.eql(u8, kind, "texts")) {
+            mark = std.fmt.parseInt(u64, parts.next() orelse "", 16) catch null;
+            continue;
+        }
         if (!std.mem.eql(u8, kind, "buffer")) continue;
 
         const entry = parseBuffer(&parts, version) orelse continue;
-        if (loadOne(b, io, gpa, open, entry)) {
+        if (loadOne(b, io, gpa, open, entry, mark)) {
             restored += 1;
         } else |_| {}
     }
@@ -184,7 +215,8 @@ pub fn signature(b: *const Buffer, extras: Extras) u64 {
 
 fn versionOf(first_line: []const u8) ?u8 {
     const line = std.mem.trim(u8, first_line, "\r");
-    if (std.mem.eql(u8, line, header)) return 3;
+    if (std.mem.eql(u8, line, header)) return 4;
+    if (std.mem.eql(u8, line, header_v3)) return 3;
     if (std.mem.eql(u8, line, header_v2)) return 2;
     if (std.mem.eql(u8, line, header_v1)) return 1;
     return null;
@@ -273,12 +305,12 @@ fn parseBuffer(parts: *std.mem.SplitIterator(u8, .scalar), version: u8) ?Entry {
     };
 }
 
-fn loadOne(b: *Buffer, io: std.Io, gpa: Allocator, dir: std.Io.Dir, entry: Entry) !void {
+fn loadOne(b: *Buffer, io: std.Io, gpa: Allocator, dir: std.Io.Dir, entry: Entry, mark: ?u64) !void {
     const path: ?[]const u8 = if (entry.path.len > 0) entry.path else null;
 
     if (entry.has_text) {
-        var name_buf: [32]u8 = undefined;
-        const file = try std.fmt.bufPrint(&name_buf, "{d}.txt", .{entry.index});
+        var name_buf: [max_text_name]u8 = undefined;
+        const file = try textName(&name_buf, mark, entry.index);
         const text = try dir.readFileAlloc(io, file, gpa, .limited(buffer_mod.max_file_bytes));
         defer gpa.free(text);
 
@@ -362,7 +394,7 @@ fn testBuffer() Buffer {
 }
 
 fn freeBuffer(b: *Buffer) void {
-    Buffer.deinit(@ptrCast(b)) catch {};
+    Buffer.deinit(@ptrCast(b));
 }
 
 test "a session comes back exactly as it was left" {
@@ -509,6 +541,39 @@ test "saving leaves no temporary files behind" {
     while (try it.next(testing.io)) |item| {
         try testing.expect(!std.mem.endsWith(u8, item.name, ".tmp"));
     }
+}
+
+test "text from an earlier save or a closed tab does not stay on disk" {
+    var s = try Scratch.init();
+    defer s.deinit();
+    const session_dir = try s.join("session");
+    defer testing.allocator.free(session_dir);
+
+    var b = testBuffer();
+    defer freeBuffer(&b);
+    const first = try b.newScratch();
+    try first.insert("secret");
+    const second = try b.newScratch();
+    try second.insert("kept");
+    try save(&b, .{}, testing.io, testing.allocator, session_dir);
+    try b.close(0);
+    try save(&b, .{}, testing.io, testing.allocator, session_dir);
+
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, session_dir, .{ .iterate = true });
+    defer dir.close(testing.io);
+    var texts: usize = 0;
+    var it = dir.iterate();
+    while (try it.next(testing.io)) |item| {
+        if (std.mem.endsWith(u8, item.name, text_suffix)) texts += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), texts);
+
+    var after = testBuffer();
+    defer freeBuffer(&after);
+    try testing.expect(try restore(&after, testing.io, testing.allocator, session_dir));
+    const back = try after.current().?.tree.allocText(testing.allocator);
+    defer testing.allocator.free(back);
+    try testing.expectEqualStrings("kept", back);
 }
 
 test "the signature moves with anything worth saving, and only then" {

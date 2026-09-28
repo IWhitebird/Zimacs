@@ -11,7 +11,7 @@ pub const Artifact = struct {
 
     pub const Table = struct {
         init: *const fn (ctx: *anyopaque) anyerror!void,
-        deinit: *const fn (ctx: *anyopaque) anyerror!void,
+        deinit: *const fn (ctx: *anyopaque) void,
         render: *const fn (ctx: *anyopaque) anyerror!void,
     };
 
@@ -19,8 +19,8 @@ pub const Artifact = struct {
         return a.table.init(a.ctx);
     }
 
-    pub fn deinit(a: Artifact) !void {
-        return a.table.deinit(a.ctx);
+    pub fn deinit(a: Artifact) void {
+        a.table.deinit(a.ctx);
     }
 
     pub fn render(a: Artifact) !void {

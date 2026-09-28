@@ -53,7 +53,7 @@ pub const Editor = struct {
 
     const Self = @This();
 
-    const BracketKey = struct { view: *const BufferView, version: u64, caret: u32 };
+    const BracketKey = struct { view: u64, version: u64, caret: u32 };
 
     const table = Artifact.Table{
         .init = &init,
@@ -69,7 +69,7 @@ pub const Editor = struct {
         _ = ctx;
     }
 
-    pub fn deinit(ctx: *anyopaque) !void {
+    pub fn deinit(ctx: *anyopaque) void {
         const e: *Self = @ptrCast(@alignCast(ctx));
         e.raw.deinit(app.gpa);
         e.shown.deinit(app.gpa);
@@ -251,6 +251,7 @@ pub const Editor = struct {
                 const y = l.text.y + @as(f32, @floatFromInt(row)) * cell.height;
                 const from = if (wrapping) e.starts.items[piece] else 0;
                 const to = if (wrapping and piece + 1 < pieces) e.starts.items[piece + 1] else columns;
+                const shown = ShownRow{ .line = line, .y = y, .columns = columns, .from = from, .to = to, .last = piece + 1 == pieces };
 
                 if (line == active and selection == null) {
                     pen.drawRectangleRec(
@@ -260,14 +261,14 @@ pub const Editor = struct {
                 }
                 for (e.matches.items) |m| {
                     const range = Range{ .start = @intCast(m.start), .end = @intCast(m.end) };
-                    e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.find_match);
+                    e.drawSpan(view, l, cell, shown, range, theme.current.find_match);
                 }
                 if (selection) |range| {
-                    e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.selection);
+                    e.drawSpan(view, l, cell, shown, range, theme.current.selection);
                 }
                 if (pair) |p| for ([_]u32{ p.open, p.close }) |at| {
                     const range = Range{ .start = at, .end = at + 1 };
-                    e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.bracket_match);
+                    e.drawSpan(view, l, cell, shown, range, theme.current.bracket_match);
                 };
                 if (e.raw.items.len == 0) continue;
 
@@ -279,7 +280,9 @@ pub const Editor = struct {
                 try e.drawRowText(view, line, first.offset, last, first.column, origin, l.text.x + layout.padding, y, cell);
             }
         }
-        view.content_columns = widest;
+        // Folded lines never scroll sideways.
+        view.content_columns = if (wrapping) visible else widest;
+        if (wrapping) view.left_column = 0;
 
         try e.drawCaret(view, l, cell);
     }
@@ -327,7 +330,7 @@ pub const Editor = struct {
     }
 
     fn bracketsAround(e: *Self, view: *const BufferView) ?brackets.Pair {
-        const key = BracketKey{ .view = view, .version = view.version, .caret = view.cursor.offset };
+        const key = BracketKey{ .view = view.id, .version = view.version, .caret = view.cursor.offset };
         if (e.bracket_key == null or !std.meta.eql(e.bracket_key.?, key)) {
             e.bracket_key = key;
             e.bracket_pair = brackets.match(&view.tree, key.caret);
@@ -345,24 +348,26 @@ pub const Editor = struct {
     }
 
     /// Paints the part of a byte range that falls on one screen row.
-    fn drawSpan(
-        e: *Self,
-        view: *BufferView,
-        l: Layout,
-        cell: Metrics,
+    /// One screen row of a line: which columns of it the row shows.
+    const ShownRow = struct {
         line: u32,
         y: f32,
-        range: Range,
+        /// The whole line's width.
         columns: u32,
-        from_column: u32,
-        to_column: u32,
-        colour: pen.Color,
-    ) void {
+        from: u32,
+        to: u32,
+        /// The line's last row, which ends where the line does.
+        last: bool,
+    };
+
+    fn drawSpan(e: *Self, view: *BufferView, l: Layout, cell: Metrics, row: ShownRow, range: Range, colour: pen.Color) void {
+        const line = row.line;
         const start = view.tree.lineStart(line);
         // Reach one column past the text so a selection spanning several lines
         // looks continuous rather than ragged.
         const stop = view.tree.lineEnd(line) + @intFromBool(line + 1 < view.tree.lineCount());
-        if (range.end <= start or range.start > stop) return;
+        // Starting on the next line means not this line's line break.
+        if (range.end <= start or range.start >= stop) return;
 
         const tab = app.config.tab_width;
         const from_byte = @max(range.start, start) - start;
@@ -370,22 +375,23 @@ pub const Editor = struct {
 
         const selected_from = text.columnOf(e.raw.items, from_byte, tab);
         const selected_to = if (to_byte > e.raw.items.len)
-            columns + 1
+            row.columns + 1
         else
             text.columnOf(e.raw.items, to_byte, tab);
 
-        // Clip to the slice of the line this row is showing.
-        const from = @max(selected_from, from_column);
-        const to = @min(selected_to, if (to_column > from_column) to_column + 1 else to_column);
+        // Clip to the slice of the line this row is showing; only its last
+        // row reaches past the text.
+        const from = @max(selected_from, row.from);
+        const to = @min(selected_to, row.to + @intFromBool(row.last));
         if (to <= from) return;
 
-        const origin = if (app.config.wrap_lines) from_column else view.left_column;
+        const origin = if (app.config.wrap_lines) row.from else view.left_column;
         if (to <= origin) return;
         const first = @max(from, origin) - origin;
         const last = to - origin;
         pen.drawRectangleRec(.{
             .x = l.text.x + layout.padding + @as(f32, @floatFromInt(first)) * cell.width,
-            .y = y,
+            .y = row.y,
             .width = @max(@as(f32, @floatFromInt(last - first)) * cell.width, 2),
             .height = cell.height,
         }, colour);
@@ -784,6 +790,9 @@ fn drawFindBar(l: Layout, cell: Metrics) !void {
     }
 }
 
+/// Room for the visible part of a field's text.
+const max_field_bytes = 1024;
+
 fn drawField(field: *const TextField, rect: pen.Rectangle, focused: bool, placeholder: [:0]const u8, cell: Metrics) void {
     const t = theme.current;
     pen.drawRectangleRec(rect, t.background);
@@ -811,9 +820,12 @@ fn drawField(field: *const TextField, rect: pen.Rectangle, focused: bool, placeh
         pen.drawRectangleRec(.{ .x = left + from * cell.width - shift, .y = y, .width = (to - from) * cell.width, .height = cell.height }, t.selection);
     }
 
-    var buf: [512]u8 = undefined;
-    const shown = std.fmt.bufPrintZ(&buf, "{s}", .{value}) catch return;
-    app.font.draw(shown, left - shift, y, t.text);
+    // Only what fits, so a long pasted value still draws.
+    const start = text.characterAt(value, @intCast(first), 1);
+    const end = text.offsetOf(value, @intCast(first + visible + 1), 1);
+    var buf: [max_field_bytes]u8 = undefined;
+    const shown = std.fmt.bufPrintZ(&buf, "{s}", .{value[start.offset..@min(end, start.offset + buf.len - 1)]}) catch return;
+    app.font.draw(shown, left + @as(f32, @floatFromInt(start.column)) * cell.width - shift, y, t.text);
     if (focused) {
         const x = left + @as(f32, @floatFromInt(caret_column)) * cell.width - shift;
         pen.drawRectangleRec(.{ .x = x, .y = y, .width = 2, .height = cell.height }, t.caret);
@@ -1012,22 +1024,20 @@ fn drawAbout(l: Layout, cell: Metrics) void {
 /// A short word on the update check, for the status bar. Null while idle.
 /// Background checks show nothing unless there is news.
 fn updateNotice() ?[:0]const u8 {
+    const u = app.update.snapshot();
     const loud = app.update.announce;
-    const v = app.update.latest;
-    return switch (app.update.status()) {
+    return switch (u.state) {
         .idle => null,
         .checking => if (loud) "checking for updates..." else null,
         .up_to_date => if (loud) "up to date" else null,
         .failed => if (loud) "update check failed" else null,
-        .available => if (app.update.problem != null)
-            std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available, could not install it", .{ v.major, v.minor, v.patch }) catch
+        .available => if (u.problem != null)
+            std.fmt.bufPrintZ(&notice_buf, "v{f} available, could not install it", .{u.latest}) catch
                 "update available, could not install it"
         else
-            std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} available", .{ v.major, v.minor, v.patch }) catch
-                "update available",
-        .downloading => std.fmt.bufPrintZ(&notice_buf, "updating to v{d}.{d}.{d}...", .{ v.major, v.minor, v.patch }) catch
-            "updating...",
-        .installed => std.fmt.bufPrintZ(&notice_buf, "v{d}.{d}.{d} installed, restart to use it", .{ v.major, v.minor, v.patch }) catch
+            std.fmt.bufPrintZ(&notice_buf, "v{f} available", .{u.latest}) catch "update available",
+        .downloading => std.fmt.bufPrintZ(&notice_buf, "updating to v{f}...", .{u.latest}) catch "updating...",
+        .installed => std.fmt.bufPrintZ(&notice_buf, "v{f} installed, restart to use it", .{u.latest}) catch
             "update installed, restart to use it",
     };
 }
@@ -1036,28 +1046,24 @@ var notice_buf: [64]u8 = undefined;
 var about_update_buf: [128]u8 = undefined;
 
 fn aboutUpdateLine() [:0]const u8 {
-    const v = app.update.latest;
-    return switch (app.update.status()) {
+    const u = app.update.snapshot();
+    return switch (u.state) {
         .idle => "Help > Check for Updates",
         .checking => "Checking for updates...",
         .up_to_date => "This is the latest release.",
         .failed => std.fmt.bufPrintZ(&about_update_buf, "Could not reach GitHub ({s}).", .{
-            app.update.problem orelse "unknown",
+            u.problem orelse "unknown",
         }) catch "Could not reach GitHub.",
-        .available => if (app.update.problem) |why|
-            std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out but did not install ({s}).", .{
-                v.major, v.minor, v.patch, why,
-            }) catch "A newer version is out but did not install."
+        .available => if (u.problem) |why|
+            std.fmt.bufPrintZ(&about_update_buf, "v{f} is out but did not install ({s}).", .{ u.latest, why }) catch
+                "A newer version is out but did not install."
         else
-            std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is out: {s}", .{
-                v.major, v.minor, v.patch, update_mod.releases_url,
-            }) catch "A newer version is available.",
-        .downloading => std.fmt.bufPrintZ(&about_update_buf, "Downloading v{d}.{d}.{d}...", .{
-            v.major, v.minor, v.patch,
-        }) catch "Downloading the update...",
-        .installed => std.fmt.bufPrintZ(&about_update_buf, "v{d}.{d}.{d} is installed. Restart Zimacs to use it.", .{
-            v.major, v.minor, v.patch,
-        }) catch "Update installed. Restart Zimacs to use it.",
+            std.fmt.bufPrintZ(&about_update_buf, "v{f} is out: {s}", .{ u.latest, update_mod.releases_url }) catch
+                "A newer version is available.",
+        .downloading => std.fmt.bufPrintZ(&about_update_buf, "Downloading v{f}...", .{u.latest}) catch
+            "Downloading the update...",
+        .installed => std.fmt.bufPrintZ(&about_update_buf, "v{f} is installed. Restart Zimacs to use it.", .{u.latest}) catch
+            "Update installed. Restart Zimacs to use it.",
     };
 }
 

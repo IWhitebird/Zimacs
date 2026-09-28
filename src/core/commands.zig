@@ -38,7 +38,7 @@ pub fn run(action: Action) !void {
         .about => app.menu.showing_about = true,
 
         .save => try save(),
-        .save_as => try browseToSave(),
+        .save_as => try browseToSave(false),
 
         .undo => if (app.buffer.current()) |v| try v.undo(),
         .redo => if (app.buffer.current()) |v| try v.redo(),
@@ -63,7 +63,10 @@ pub fn run(action: Action) !void {
         .move_line_down => if (app.buffer.current()) |v| try v.moveLine(.down),
         .open_line_below => if (app.buffer.current()) |v| try v.openLineBelow(),
         .open_line_above => if (app.buffer.current()) |v| try v.openLineAbove(),
-        .indent => if (app.buffer.current()) |v| try v.indentLines(app.config.tab_width),
+        .indent => if (app.buffer.current()) |v| {
+            var unit: [config_mod.max_indent_unit]u8 = undefined;
+            try v.indentLines(app.config.indentUnit(&unit));
+        },
         .outdent => if (app.buffer.current()) |v| try v.outdentLines(app.config.tab_width),
         .goto_line => try app.prompt.begin(.goto_line, ""),
         .find => try openFind(false),
@@ -81,7 +84,7 @@ pub fn run(action: Action) !void {
 /// Saves, asking for a name first if the buffer has never had one.
 pub fn save() !void {
     const view = app.buffer.current() orelse return;
-    if (view.path == null) return browseToSave();
+    if (view.path == null) return browseToSave(false);
     _ = saveView(view);
 }
 
@@ -97,12 +100,28 @@ fn saveView(view: *BufferView) bool {
 
 /// Saves under a new name, then closes the tab if closing is what asked.
 pub fn saveViewAs(view: *BufferView, path: []const u8) void {
+    const pending = pending_save;
+    pending_save = null;
     const outcome = app.buffer.saveAs(view, path) catch |err| return report("Could not save", err);
     announceSave(view, outcome);
-    if (closing_after_save == view) {
-        closing_after_save = null;
+    const p = pending orelse return;
+    if (p.view == view.id and p.then_close) {
         if (app.buffer.indexOf(view)) |i| app.buffer.close(i) catch |err| report("Could not close", err);
     }
+}
+
+/// A Save As waiting on the user to pick a name.
+const PendingSave = struct {
+    /// The tab's id, since it may close while the choice is being made.
+    view: u64,
+    /// Closing the tab is what asked for it.
+    then_close: bool,
+};
+var pending_save: ?PendingSave = null;
+
+/// A Save As was cancelled, so nothing waits on it any more.
+pub fn cancelSave() void {
+    pending_save = null;
 }
 
 fn announceSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
@@ -113,36 +132,27 @@ fn announceSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
 
 // ------------------------------------------------------- file dialogs
 
-/// The tab a system Save As dialog is choosing a name for.
-var saving: ?*BufferView = null;
+const dialog_open = "Finish the open file dialog first";
 
 /// Acts on what a system file dialog chose, once it has closed.
 pub fn finishFileDialog(outcome: filedialog.Outcome) void {
     const path = outcome.path orelse {
-        // A cancelled Save As leaves a tab that was closing open.
-        if (outcome.kind == .save) {
-            if (closing_after_save == saving) closing_after_save = null;
-            saving = null;
-        }
+        if (outcome.kind == .save) cancelSave();
         return;
     };
     defer app.gpa.free(path);
     switch (outcome.kind) {
         .open => app.openFile(path) catch |err| report("Could not open", err),
         .save => {
-            const view = saving orelse return;
-            saving = null;
+            const p = pending_save orelse return;
             // The tab may have been closed while the dialog was up.
-            if (app.buffer.indexOf(view) == null) return;
+            const view = app.buffer.withId(p.view) orelse return cancelSave();
             saveViewAs(view, path);
         },
     }
 }
 
 // ------------------------------------------------------------ closing
-
-/// A tab waiting on Save As before it can close.
-var closing_after_save: ?*BufferView = null;
 
 /// Closes a tab, first asking what to do with unsaved changes.
 pub fn requestClose(index: usize) !void {
@@ -160,8 +170,7 @@ pub fn answer(a: dialog_mod.Answer) !void {
     const index = app.buffer.indexOf(view) orelse return;
     switch (a) {
         .save => if (view.path == null) {
-            closing_after_save = view;
-            try browseToSave();
+            try browseToSave(true);
         } else if (saveView(view)) {
             try app.buffer.close(index);
         },
@@ -196,18 +205,19 @@ pub fn checkDisk() void {
     }
 }
 
-/// Opens the browser to pick where to save. Typing a name and pressing Enter
+/// Asks where to save the current tab, and closes it afterwards if
+/// `then_close`. Typing a name in the built-in browser and pressing Enter
 /// saves into whichever directory is showing.
-pub fn browseToSave() !void {
+pub fn browseToSave(then_close: bool) !void {
     const view = app.buffer.current() orelse return;
     const io = app.io orelse return app.prompt.begin(.save_as, view.path orelse "");
 
     const start = if (view.path) |p| std.fs.path.dirname(p) orelse "." else ".";
     const name = if (view.path != null) std.fs.path.basename(view.name) else "";
-    if (app.file_dialog.show(app.gpa, io, .{ .kind = .save, .dir = start, .name = name })) {
-        saving = view;
-        return;
-    }
+    const shown = app.file_dialog.show(app.gpa, io, .{ .kind = .save, .dir = start, .name = name });
+    if (shown == .busy) return tell(.info, dialog_open, .{});
+    pending_save = .{ .view = view.id, .then_close = then_close };
+    if (shown == .shown) return;
     app.browser.show(io, start, app.config.show_hidden) catch |err| {
         report("Could not read directory", err);
         return app.prompt.begin(.save_as, "");
@@ -250,7 +260,11 @@ pub fn browse(at: ?[]const u8) !void {
     };
     // The system's dialog when there is one; stepping between directories
     // of the built-in browser stays in it.
-    if (at == null and app.file_dialog.show(app.gpa, io, .{ .kind = .open, .dir = start })) return;
+    if (at == null) switch (app.file_dialog.show(app.gpa, io, .{ .kind = .open, .dir = start })) {
+        .shown => return,
+        .busy => return tell(.info, dialog_open, .{}),
+        .unavailable => {},
+    };
 
     app.browser.show(io, start, app.config.show_hidden) catch |err| {
         report("Could not read directory", err);

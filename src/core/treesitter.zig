@@ -88,7 +88,8 @@ pub extern fn ts_query_capture_count(query: *const Query) u32;
 pub extern fn ts_query_pattern_count(query: *const Query) u32;
 pub extern fn ts_query_capture_name_for_id(query: *const Query, index: u32, length: *u32) [*]const u8;
 pub extern fn ts_query_string_value_for_id(query: *const Query, index: u32, length: *u32) [*]const u8;
-pub extern fn ts_query_predicates_for_pattern(query: *const Query, pattern_index: u32, step_count: *u32) [*]const PredicateStep;
+/// Null for a pattern with no predicates.
+pub extern fn ts_query_predicates_for_pattern(query: *const Query, pattern_index: u32, step_count: *u32) ?[*]const PredicateStep;
 
 pub extern fn ts_query_cursor_new() ?*QueryCursor;
 pub extern fn ts_query_cursor_delete(cursor: *QueryCursor) void;

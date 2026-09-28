@@ -57,6 +57,9 @@ pub const Colors = struct {
     }
 };
 
+/// The widest indentation unit `tab_width` can ask for.
+pub const max_indent_unit = 16;
+
 pub const Config = struct {
     font_size: f32 = 18,
     caret_style: CaretStyle = .line,
@@ -77,6 +80,14 @@ pub const Config = struct {
     colors: Colors = .{},
     /// The first line that could not be used, to tell the user about.
     problem: ?Problem = null,
+
+    /// What one level of indentation is made of: a tab, or `tab_width` spaces.
+    pub fn indentUnit(c: *const Config, buf: *[max_indent_unit]u8) []const u8 {
+        if (!c.expand_tabs) return "\t";
+        const width = @min(c.tab_width, buf.len);
+        @memset(buf[0..width], ' ');
+        return buf[0..width];
+    }
 
     pub const Problem = struct { line: u32, why: []const u8 };
 

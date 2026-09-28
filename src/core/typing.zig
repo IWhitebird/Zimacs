@@ -130,7 +130,7 @@ fn typeAll(view: *BufferView, s: []const u8, lang: *const Language) !void {
 
 test "a bracket brings its closer, and typing the closer steps over it" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try typeAll(v, "f(", zig);
     try expectText(v, "f()", 2);
@@ -140,7 +140,7 @@ test "a bracket brings its closer, and typing the closer steps over it" {
 
 test "quotes pair, but not after a word or inside one" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try typeAll(v, "a = \"", zig);
     try expectText(v, "a = \"\"", 5);
@@ -152,7 +152,7 @@ test "quotes pair, but not after a word or inside one" {
 
 test "no closer is added in front of a word" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newFilled("x.zig", "name");
     v.cursor.moveTo(&v.tree, 0, false);
     try typeText(v, "(", zig);
@@ -161,7 +161,7 @@ test "no closer is added in front of a word" {
 
 test "a selection is wrapped and stays selected" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newFilled("x.zig", "a word b");
     v.cursor.anchor = 2;
     v.cursor.offset = 6;
@@ -172,7 +172,7 @@ test "a selection is wrapped and stays selected" {
 
 test "backspace in an empty pair removes both halves" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try typeAll(v, "x{", zig);
     try backspace(v, zig);
@@ -181,7 +181,7 @@ test "backspace in an empty pair removes both halves" {
 
 test "enter between braces opens an indented line inside them" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try typeAll(v, "  fn() {", zig);
     try newline(v, zig, "    ");
@@ -190,7 +190,7 @@ test "enter between braces opens an indented line inside them" {
 
 test "prose is typed as is" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try typeAll(v, "(\"", &language.plain);
     try expectText(v, "(\"", 2);

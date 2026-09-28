@@ -92,11 +92,14 @@ pub const History = struct {
         };
         errdefer edit.deinit(h.gpa);
 
-        if (try h.merge(edit)) return;
+        if (try h.merge(edit)) {
+            // A different text now, so not the state a save may have seen.
+            h.edits.items[h.applied - 1].id = h.freshId();
+            return;
+        }
 
         var fresh = edit;
-        fresh.id = h.next_id;
-        h.next_id += 1;
+        fresh.id = h.freshId();
         try h.edits.append(h.gpa, fresh);
         h.applied = h.edits.items.len;
         try h.trim();
@@ -116,6 +119,11 @@ pub const History = struct {
         const edit = h.edits.items[h.applied];
         h.applied += 1;
         return edit;
+    }
+
+    fn freshId(h: *Self) u64 {
+        defer h.next_id += 1;
+        return h.next_id;
     }
 
     /// Anything undone is thrown away as soon as a fresh edit arrives.
@@ -138,7 +146,7 @@ pub const History = struct {
             h.sealed = false;
             return false;
         }
-        if (h.applied == 0 or h.applied != h.edits.items.len) return false;
+        if (h.applied == 0) return false;
         const last = &h.edits.items[h.applied - 1];
 
         // Typing straight on from where the last text was inserted.

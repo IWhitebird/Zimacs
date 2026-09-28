@@ -113,14 +113,6 @@ pub const Cursor = struct {
         c.resetGoal(tree);
     }
 
-    pub fn up(c: *Self, tree: *const PieceTree, extend: bool) void {
-        c.moveLines(tree, -1, extend);
-    }
-
-    pub fn down(c: *Self, tree: *const PieceTree, extend: bool) void {
-        c.moveLines(tree, 1, extend);
-    }
-
     pub fn pageUp(c: *Self, tree: *const PieceTree, lines: u32, extend: bool) void {
         c.moveLines(tree, -@as(i64, lines), extend);
     }
@@ -217,8 +209,12 @@ pub const Cursor = struct {
             @min(@as(u32, @intCast(wanted)), tree.lineCount() - 1);
 
         // offsetAt clamps an over-long column to the line's end, which is
-        // exactly what the goal column relies on.
-        c.offset = tree.offsetAt(.{ .line = line, .column = c.goal });
+        // exactly what the goal column relies on. The goal counts bytes, so
+        // it can fall inside a character; step back to where that starts.
+        var offset = tree.offsetAt(.{ .line = line, .column = c.goal });
+        const start = tree.lineStart(line);
+        while (offset > start and isTrailing(tree.byteAt(offset) orelse 0)) offset -= 1;
+        c.offset = offset;
     }
 };
 
@@ -263,11 +259,22 @@ test "goal column survives a short line" {
     c.end(&tree, false);
     try testing.expectEqual(@as(u32, 6), c.goal);
 
-    c.down(&tree, false);
+    c.pageDown(&tree, 1, false);
     try testing.expectEqual(@as(u32, 2), c.position(&tree).column);
 
-    c.down(&tree, false);
+    c.pageDown(&tree, 1, false);
     try testing.expectEqual(@as(u32, 6), c.position(&tree).column);
+}
+
+test "moving between lines never lands inside a character" {
+    var tree = try treeOf("ab\n\u{e9}z");
+    defer tree.deinit();
+    var c = Cursor{ .offset = 1 };
+    c.resetGoal(&tree);
+
+    c.pageDown(&tree, 1, false);
+    // Byte column 1 of the second line is the middle of the é.
+    try testing.expectEqual(@as(u32, 3), c.offset);
 }
 
 test "home and end" {

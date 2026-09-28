@@ -176,7 +176,7 @@ const test_font = Font{ .metrics = .{ .width = 8, .height = 16 } };
 
 test "buttons sit inside the panel, in order, without overlapping" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try b.newScratch();
 
     for ([_]Question{ .{ .close_unsaved = view }, .{ .changed_on_disk = view } }) |q| {
@@ -194,7 +194,7 @@ test "buttons sit inside the panel, in order, without overlapping" {
 
 test "the middle of each button picks it" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const g = geometry(testLayout(), test_font, .{ .close_unsaved = try b.newScratch() });
     for (g.buttons[0..g.count], 0..) |r, i| {
         try testing.expectEqual(i, buttonAt(.{ .x = r.x + r.width / 2, .y = r.y + r.height / 2 }, g).?);
@@ -204,7 +204,7 @@ test "the middle of each button picks it" {
 
 test "escape always picks the choice that loses nothing" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try b.newScratch();
     try testing.expectEqual(Answer.cancel, (Question{ .close_unsaved = view }).dismissal());
     try testing.expectEqual(Answer.keep, (Question{ .changed_on_disk = view }).dismissal());
@@ -212,7 +212,7 @@ test "escape always picks the choice that loses nothing" {
 
 test "focus cycles through the buttons and wraps" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     var d = Dialog{};
     d.ask(.{ .close_unsaved = try b.newScratch() });
     try testing.expectEqual(Answer.save, d.focused().?);
@@ -225,7 +225,7 @@ test "focus cycles through the buttons and wraps" {
 
 test "a very long file name is shortened in the title" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try b.newFilled("x" ** 200, "");
     var buf: [title_capacity]u8 = undefined;
     const t = title(&buf, .{ .close_unsaved = view });

@@ -43,7 +43,8 @@ pub const Find = struct {
 
     /// The document's text, recopied only when it changes.
     snapshot: std.ArrayList(u8) = .empty,
-    snapshot_of: ?*const BufferView = null,
+    /// The id of the view it was copied from.
+    snapshot_of: ?u64 = null,
     snapshot_version: u64 = 0,
     total: usize = 0,
     counted_for: ?u64 = null,
@@ -99,10 +100,10 @@ pub const Find = struct {
 
     /// Brings the text copy and the match count up to date with `view`.
     pub fn sync(f: *Self, view: *const BufferView) !void {
-        if (f.snapshot_of != view or f.snapshot_version != view.version) {
+        if (f.snapshot_of != view.id or f.snapshot_version != view.version) {
             f.snapshot.clearRetainingCapacity();
             try view.tree.copy(0, view.tree.len(), &f.snapshot);
-            f.snapshot_of = view;
+            f.snapshot_of = view.id;
             f.snapshot_version = view.version;
             f.counted_for = null;
         }
@@ -382,7 +383,7 @@ fn testView(b: *Buffer, content: []const u8) !*BufferView {
 
 test "stepping selects matches in order and wraps" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try testView(&b, "one two one two one");
     var f = Find{ .gpa = testing.allocator };
     defer f.deinit();
@@ -405,7 +406,7 @@ test "stepping selects matches in order and wraps" {
 
 test "replace all is one edit and undoes in one step" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try testView(&b, "cat cat cat");
     var f = Find{ .gpa = testing.allocator };
     defer f.deinit();
@@ -425,7 +426,7 @@ test "replace all is one edit and undoes in one step" {
 
 test "replace one only replaces a selected match, then moves on" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try testView(&b, "a b a");
     var f = Find{ .gpa = testing.allocator };
     defer f.deinit();
@@ -441,7 +442,7 @@ test "replace one only replaces a selected match, then moves on" {
 
 test "the snapshot follows edits to the document" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const view = try testView(&b, "x");
     var f = Find{ .gpa = testing.allocator };
     defer f.deinit();

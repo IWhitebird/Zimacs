@@ -55,6 +55,9 @@ pub const BufferView = struct {
     /// The history position that matches what is on disk, or null when no
     /// position does, as for unsaved text brought back by a session.
     saved: ?u64 = 0,
+    /// Never shared with another view, even one reusing this one's memory,
+    /// so results kept for a view can tell it is still the same one.
+    id: u64 = 0,
     /// Bumped by every change to the text, so derived results know to refresh.
     version: u64 = 0,
     /// How the file on disk is encoded, restored on save.
@@ -283,16 +286,16 @@ pub const BufferView = struct {
         return .{ .first = first, .last = last };
     }
 
-    /// Adds `width` spaces to the front of every selected line, as one edit so
-    /// a single undo takes it back.
-    pub fn indentLines(v: *Self, width: u8) !void {
+    /// Puts `unit` at the front of every selected line, as one edit so a
+    /// single undo takes it back.
+    pub fn indentLines(v: *Self, unit: []const u8) !void {
         const lines = v.selectedLines();
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(v.gpa);
 
         var line = lines.first;
         while (line <= lines.last) : (line += 1) {
-            try out.appendNTimes(v.gpa, ' ', width);
+            try out.appendSlice(v.gpa, unit);
             try v.appendLineWithBreak(&out, line, lines.last);
         }
         try v.replaceLines(lines.first, lines.last, out.items);
@@ -423,6 +426,7 @@ pub const Buffer = struct {
     views: std.ArrayList(*BufferView) = .empty,
     active: usize = 0,
     untitled_count: u32 = 0,
+    next_view_id: u64 = 1,
 
     const Self = @This();
 
@@ -440,7 +444,7 @@ pub const Buffer = struct {
         _ = ctx;
     }
 
-    pub fn deinit(ctx: *anyopaque) !void {
+    pub fn deinit(ctx: *anyopaque) void {
         const b: *Self = @ptrCast(@alignCast(ctx));
         for (b.views.items) |v| {
             v.deinit();
@@ -556,6 +560,11 @@ pub const Buffer = struct {
         view.disk = stampOf(io, path);
     }
 
+    pub fn withId(b: *const Self, id: u64) ?*BufferView {
+        for (b.views.items) |v| if (v.id == id) return v;
+        return null;
+    }
+
     pub fn indexOf(b: *const Self, view: *const BufferView) ?usize {
         for (b.views.items, 0..) |v, i| {
             if (v == view) return i;
@@ -578,12 +587,14 @@ pub const Buffer = struct {
         errdefer b.gpa.destroy(view);
         view.* = .{
             .gpa = b.gpa,
+            .id = b.next_view_id,
             .tree = tree,
             .history = .{ .gpa = b.gpa },
             .path = path,
             .name = name,
             .rows = .{ .gpa = b.gpa },
         };
+        b.next_view_id += 1;
         view.setLanguage();
         try b.views.append(b.gpa, view);
         b.active = b.views.items.len - 1;
@@ -601,16 +612,39 @@ pub const Buffer = struct {
             _ = try b.newScratch();
             return;
         }
+        // The active tab stays active when one before it closes.
+        if (index < b.active) b.active -= 1;
         if (b.active >= b.views.items.len) b.active = b.views.items.len - 1;
     }
 
     pub const Saved = enum { as_before, switched_to_utf8 };
 
+    pub fn save(b: *Self, view: *BufferView) !Saved {
+        return b.write(view, view.path orelse return error.NoFileName);
+    }
+
+    /// The tab takes the new name only once the file is written, so a save
+    /// that fails leaves it as it was.
+    pub fn saveAs(b: *Self, view: *BufferView, path: []const u8) !Saved {
+        const io = b.io orelse return error.NoFilesystem;
+        const owned_path = try absolute(io, b.gpa, path);
+        errdefer b.gpa.free(owned_path);
+        const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
+        errdefer b.gpa.free(name);
+        const outcome = try b.write(view, owned_path);
+
+        if (view.path) |old| b.gpa.free(old);
+        b.gpa.free(view.name);
+        view.path = owned_path;
+        view.name = name;
+        view.setLanguage();
+        return outcome;
+    }
+
     /// Writes the file in its own format. Text the file's encoding cannot
     /// hold is saved as UTF-8 instead, and reported, rather than lost.
-    pub fn save(b: *Self, view: *BufferView) !Saved {
+    fn write(b: *Self, view: *BufferView, path: []const u8) !Saved {
         const io = b.io orelse return error.NoFilesystem;
-        const path = view.path orelse return error.NoFileName;
         const text = try view.tree.allocText(b.gpa);
         defer b.gpa.free(text);
 
@@ -629,21 +663,6 @@ pub const Buffer = struct {
         view.markSaved();
         view.disk = stampOf(io, path);
         return outcome;
-    }
-
-    pub fn saveAs(b: *Self, view: *BufferView, path: []const u8) !Saved {
-        const io = b.io orelse return error.NoFilesystem;
-        const owned_path = try absolute(io, b.gpa, path);
-        errdefer b.gpa.free(owned_path);
-        const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
-        errdefer b.gpa.free(name);
-
-        if (view.path) |old| b.gpa.free(old);
-        b.gpa.free(view.name);
-        view.path = owned_path;
-        view.name = name;
-        view.setLanguage();
-        return b.save(view);
     }
 };
 
@@ -998,7 +1017,7 @@ test "indent and outdent a block" {
     v.cursor.anchor = 0;
     v.cursor.offset = 8; // "one" and "two"
 
-    try v.indentLines(2);
+    try v.indentLines("  ");
     var text = try textOf(&v);
     try testing.expectEqualSlices(u8, "  one\n  two\nthree\n", text);
     testing.allocator.free(text);
@@ -1026,7 +1045,7 @@ test "indent with no selection does the caret's line only" {
     defer v.deinit();
     v.cursor.offset = 5;
 
-    try v.indentLines(4);
+    try v.indentLines("    ");
     const text = try textOf(&v);
     defer testing.allocator.free(text);
     try testing.expectEqualSlices(u8, "one\n    two\n", text);
@@ -1048,7 +1067,7 @@ test "saveAs renames the buffer and survives the caller reusing its path buffer"
     defer gpa.free(path);
 
     var b = Buffer{ .gpa = gpa, .io = io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
 
     const view = try b.newScratch();
     try view.insert("ok man\n");
@@ -1069,7 +1088,7 @@ test "saveAs renames the buffer and survives the caller reusing its path buffer"
 
 test "enter carries the line's indentation onto the new line" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try v.insert("\t  if (x) {");
     try v.newline();
@@ -1081,7 +1100,7 @@ test "enter carries the line's indentation onto the new line" {
 
 test "enter inside the indentation only carries what is before the caret" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try v.insert("    x");
     v.cursor.moveTo(&v.tree, 2, false);
@@ -1093,7 +1112,7 @@ test "enter inside the indentation only carries what is before the caret" {
 
 test "open line above and below keep the indentation too" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try v.insert("  mid");
     try v.openLineBelow();
@@ -1108,7 +1127,7 @@ test "open line above and below keep the indentation too" {
 
 test "typing straight after a save still counts as unsaved" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try v.insert("a");
     v.markSaved();
@@ -1124,7 +1143,7 @@ test "typing straight after a save still counts as unsaved" {
 
 test "undoing past a save and typing something else counts as unsaved" {
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     const v = try b.newScratch();
     try v.insert("a");
     v.markSaved();
@@ -1137,13 +1156,56 @@ test "undoing past a save and typing something else counts as unsaved" {
     try testing.expect(v.edited());
 }
 
+test "undoing back to the save point and typing on counts as unsaved" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b));
+    const v = try b.newScratch();
+    try v.insert("a");
+    v.markSaved();
+    try v.insert("b");
+    try v.undo();
+    try testing.expect(!v.edited());
+    // Joins the saved entry, which must then stop counting as saved.
+    try v.insert("c");
+    try testing.expect(v.edited());
+}
+
+test "a Save As that fails leaves the tab as it was" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const dir = dir_buf[0..try tmp.dir.realPath(testing.io, &dir_buf)];
+    const path = try std.fs.path.join(testing.allocator, &.{ dir, "missing", "x.txt" });
+    defer testing.allocator.free(path);
+
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b));
+    const v = try b.newScratch();
+    const name = try testing.allocator.dupe(u8, v.name);
+    defer testing.allocator.free(name);
+    try testing.expectError(error.FileNotFound, b.saveAs(v, path));
+    try testing.expectEqualStrings(name, v.name);
+    try testing.expect(v.path == null);
+}
+
+test "closing a tab before the active one keeps the same tab active" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b));
+    _ = try b.newFilled("one", "1");
+    const two = try b.newFilled("two", "2");
+    _ = try b.newFilled("three", "3");
+    b.active = 1;
+    try b.close(0);
+    try testing.expectEqual(two, b.current().?);
+}
+
 test "a file opened by a relative path is stored by its absolute one" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "hi" });
 
     var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
-    defer Buffer.deinit(@ptrCast(&b)) catch {};
+    defer Buffer.deinit(@ptrCast(&b));
     var relative_buf: [128]u8 = undefined;
     const relative = try std.fmt.bufPrint(&relative_buf, ".zig-cache/tmp/{s}/notes.txt", .{tmp.sub_path});
     try b.openOrSelect(relative);

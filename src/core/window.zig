@@ -82,7 +82,7 @@ pub const Window = struct {
         if (w.startup_id) |id| native.finishStartup(id);
     }
 
-    pub fn deinit(ctx: *anyopaque) !void {
+    pub fn deinit(ctx: *anyopaque) void {
         _ = ctx;
         pen.closeWindow();
     }
