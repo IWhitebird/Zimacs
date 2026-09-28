@@ -22,7 +22,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/IWhitebird/Zimacs/master/scripts/install.ps1 | iex
 ```
 
-No admin rights needed. Or download it from the
+Or download it from the
 [releases page](https://github.com/IWhitebird/Zimacs/releases/latest).
 
 Zimacs updates itself. Updates are signed, and one that fails the check is

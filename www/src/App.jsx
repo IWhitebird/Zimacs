@@ -87,7 +87,7 @@ function Install() {
         <code>{INSTALL[os]}</code>
       </pre>
       <p className="fineprint">
-        No admin rights needed. <a href={`${REPO}/releases/latest`}>Or download it.</a>
+        <a href={`${REPO}/releases/latest`}>Or download it.</a>
       </p>
     </div>
   );
