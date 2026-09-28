@@ -519,11 +519,13 @@ fn windowShortcuts() !void {
     if (pressed(.page_up)) app.buffer.previous();
     selectTabByNumber();
 
+    if (pressed(.b)) try commands.run(.toggle_sidebar);
+    if (pressed(.p)) try commands.run(.quick_open);
     if (pressed(.n)) try commands.run(.new_tab);
     if (pressed(.w)) try commands.run(.close_tab);
-    if (pressed(.o)) try commands.run(.open_file);
+    if (pressed(.o)) try commands.run(if (shift) .open_folder else .open_file);
     if (pressed(.r)) try commands.run(.open_recent);
-    if (pressed(.f)) try commands.run(.find);
+    if (pressed(.f)) try commands.run(if (shift) .search_folder else .find);
     if (pressed(.h)) try commands.run(.replace);
     if (pressed(.g)) try commands.run(.goto_line);
     if (pressed(.s)) try commands.run(if (shift) .save_as else .save);
@@ -582,6 +584,7 @@ fn mouse() !void {
     const l = editor.currentLayout();
 
     if (pen.isMouseButtonPressed(.left)) {
+        if (pen.checkCollisionPointRec(point, l.sidebar)) return clickSidebar(point, l);
         if (app.editor.tabs.closeAt(l.tabs, point)) |index| {
             try commands.requestClose(index);
             return;
@@ -637,6 +640,17 @@ fn mouse() !void {
             if (point.y > l.text.y + l.text.height) app.editor.scroll(1);
         },
     }
+}
+
+/// A folder in the tree opens or shuts; a file opens in a tab.
+fn clickSidebar(point: pen.Vector2, l: layout_mod.Layout) void {
+    const root = app.workspace.root orelse return;
+    const io = app.io orelse return;
+    const cell = app.font.metrics;
+    const row = app.sidebar.rowAt(layout_mod.sidebarRowsTop(l, cell), layout_mod.listRowHeight(cell), point.y) orelse return;
+    const entry = app.sidebar.rows.items[row];
+    if (entry.folder) return app.sidebar.toggle(io, root, row);
+    commands.openInFolder(entry.path);
 }
 
 const Bar = enum { vertical, horizontal };
@@ -769,25 +783,34 @@ fn scroll() void {
     const wheel = pen.getMouseWheelMove();
     if (wheel == 0) return;
     // Wheel up is positive and should move toward the start of the file.
-    // Over the tab bar the wheel scrolls the tabs instead.
-    if (pen.checkCollisionPointRec(pen.getMousePosition(), editor.currentLayout().tabs)) {
+    // Over the tab bar the wheel scrolls the tabs instead, and over the
+    // folder tree the tree.
+    const l = editor.currentLayout();
+    const point = pen.getMousePosition();
+    if (pen.checkCollisionPointRec(point, l.tabs)) {
         app.editor.tabs.scrollBy(-wheel * app.font.metrics.width * tab_wheel_columns);
         return;
     }
     const steps: i32 = @intFromFloat(@round(wheel * wheel_lines));
+    if (pen.checkCollisionPointRec(point, l.sidebar)) return app.sidebar.scrollBy(-steps);
     if (shiftDown()) app.editor.scrollSideways(-steps) else app.editor.scroll(-steps);
 }
 
 // -------------------------------------------------------------- prompt
 
 fn runPrompt() !void {
+    var edited = false;
     var utf8: [4]u8 = undefined;
     while (nextTyped(&utf8)) |typed| {
-        if (!shortcutHeld()) try app.prompt.append(typed);
+        if (shortcutHeld()) continue;
+        try app.prompt.append(typed);
+        edited = true;
     }
 
     if (pressed(.up)) app.prompt.cycle(-1);
     if (pressed(.down)) app.prompt.cycle(1);
+    const wheel = pen.getMouseWheelMove();
+    if (wheel != 0) app.prompt.scrollBy(@intFromFloat(@round(-wheel * wheel_lines)));
     if (pressed(.backspace)) {
         // With nothing typed, backspace steps up a directory.
         if (app.prompt.kind == .browse and app.prompt.text().len == 0) {
@@ -795,7 +818,10 @@ fn runPrompt() !void {
             return;
         }
         app.prompt.backspace();
+        edited = true;
     }
+    // A folder search runs again as its query changes.
+    if (edited and app.prompt.kind == .search_folder) commands.searchQueryEdited();
 
     // Clicking a suggestion picks it.
     if (pen.isMouseButtonPressed(.left)) {
@@ -818,6 +844,7 @@ fn commitPrompt() !void {
     // or stepping into a directory immediately reuses.
     const chosen = try app.prompt.takeResult(app.gpa);
     defer app.gpa.free(chosen);
+    const option = app.prompt.chosenOption();
 
     const kind = app.prompt.kind;
     if (kind != .browse and kind != .save_into) app.prompt.cancel();
@@ -827,6 +854,9 @@ fn commitPrompt() !void {
         .browse => try commands.chooseInBrowser(chosen),
         .save_into => try commands.saveInBrowser(chosen),
         .open => app.openFile(chosen) catch |err| report("Could not open", err),
+        .open_folder => app.openFolder(chosen) catch |err| report("Could not open the folder", err),
+        .quick_open => commands.openInFolder(chosen),
+        .search_folder => if (option) |hit| commands.openHit(hit),
         .save_as => {
             const view = app.buffer.current() orelse return;
             commands.saveViewAs(view, chosen);

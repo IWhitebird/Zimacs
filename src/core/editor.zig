@@ -98,6 +98,7 @@ pub const Editor = struct {
         const cell = app.font.metrics;
         const l = currentLayout();
 
+        drawSidebar(l, cell);
         const view = app.buffer.current() orelse {
             try drawHint(l, cell);
             drawMenu(l, cell);
@@ -497,6 +498,67 @@ pub const Editor = struct {
         }
     }
 
+    /// How the folder search is going, at the right of its query.
+    fn drawSearchCount(panel: pen.Rectangle) void {
+        const s = &app.folder_search;
+        var buf: [max_row_label]u8 = undefined;
+        const count: [:0]const u8 = if (s.running.load(.acquire))
+            "searching..."
+        else if (s.query.items.len == 0)
+            ""
+        else if (s.hits().len == 0)
+            "no matches"
+        else
+            std.fmt.bufPrintZ(&buf, "{d}{s} found", .{ s.hits().len, if (s.cutShort()) "+" else "" }) catch "";
+        const x = panel.x + panel.width - layout.padding - app.font.widthOf(count);
+        app.font.draw(count, x, panel.y + layout.padding, theme.current.hint);
+    }
+
+    /// The folder tree: a row naming the folder, then what is in it, with
+    /// the file in front marked.
+    fn drawSidebar(l: Layout, cell: Metrics) void {
+        if (l.sidebar.width <= 0) return;
+        const t = theme.current;
+        pen.drawRectangleRec(l.sidebar, t.tab_background);
+        pen.beginScissorMode(
+            @intFromFloat(l.sidebar.x),
+            @intFromFloat(l.sidebar.y),
+            @intFromFloat(l.sidebar.width),
+            @intFromFloat(l.sidebar.height),
+        );
+        defer pen.endScissorMode();
+
+        const row_height = layout.listRowHeight(cell);
+        const inset = (row_height - cell.height) / 2;
+        var label_buf: [max_row_label]u8 = undefined;
+        const heading = std.fmt.bufPrintZ(&label_buf, "{s}", .{app.workspace.name()}) catch "";
+        app.font.draw(heading, l.sidebar.x + layout.padding, l.sidebar.y + inset, t.hint);
+
+        const active = if (app.buffer.current()) |v| if (v.path) |p| app.workspace.relativeOf(p) else null else null;
+        const point = pen.getMousePosition();
+        const indent = cell.width * sidebar_indent_columns;
+        var y = layout.sidebarRowsTop(l, cell);
+        for (app.sidebar.rows.items[app.sidebar.top..]) |row| {
+            if (y >= l.sidebar.y + l.sidebar.height) break;
+            defer y += row_height;
+            const rect = pen.Rectangle{ .x = l.sidebar.x, .y = y, .width = l.sidebar.width, .height = row_height };
+            const is_active = !row.folder and active != null and std.mem.eql(u8, row.path, active.?);
+            if (is_active) {
+                pen.drawRectangleRec(rect, t.tab_active);
+            } else if (pen.checkCollisionPointRec(point, rect)) {
+                pen.drawRectangleRec(rect, t.current_line);
+            }
+            const x = l.sidebar.x + layout.padding + @as(f32, @floatFromInt(row.depth)) * indent;
+            if (row.folder) {
+                widgets.drawChevron(.{ .x = x, .y = y, .width = row_height, .height = row_height }, if (row.open) .down else .right, t.tab_text);
+            }
+            const name = std.fmt.bufPrintZ(&label_buf, "{s}", .{row.name}) catch continue;
+            app.font.draw(name, x + row_height, y + inset, if (is_active) t.tab_text_active else t.tab_text);
+        }
+        // The edge against the tabs and text.
+        pen.drawRectangleRec(.{ .x = l.sidebar.x + l.sidebar.width - 1, .y = l.sidebar.y, .width = 1, .height = l.sidebar.height }, t.current_line);
+    }
+
     fn drawTabs(e: *Self, l: Layout) !void {
         if (l.tabs.height <= 0) return;
         e.tabs.widths.clearRetainingCapacity();
@@ -634,6 +696,7 @@ pub const Editor = struct {
             .height = cell.height,
         }, theme.current.caret);
 
+        if (app.prompt.kind == .search_folder) drawSearchCount(panel);
         if (app.prompt.options.len == 0) return;
         if (app.prompt.matches.items.len == 0) {
             app.font.draw(
@@ -646,9 +709,9 @@ pub const Editor = struct {
         }
 
         const point = pen.getMousePosition();
-        for (app.prompt.matches.items[0..shown], 0..) |option, row| {
+        for (app.prompt.visible(), 0..) |option, row| {
             const rect = layout.promptRow(panel, cell, row);
-            const hot = row == app.prompt.highlighted() or pen.checkCollisionPointRec(point, rect);
+            const hot = app.prompt.first + row == app.prompt.highlighted() or pen.checkCollisionPointRec(point, rect);
             if (hot) pen.drawRectangleRec(rect, theme.current.selection);
 
             e.status.clearRetainingCapacity();
@@ -702,8 +765,12 @@ fn drawMenu(l: Layout, cell: Metrics) void {
 
 fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
     var buf: [256]u8 = undefined;
+    const folder = app.workspace.name();
     const title: [:0]const u8 = if (app.buffer.current()) |v|
-        std.fmt.bufPrintZ(&buf, "{s} - Zimacs", .{v.name}) catch "Zimacs"
+        (if (folder.len > 0)
+            std.fmt.bufPrintZ(&buf, "{s} - {s} - Zimacs", .{ v.name, folder })
+        else
+            std.fmt.bufPrintZ(&buf, "{s} - Zimacs", .{v.name})) catch "Zimacs"
     else
         "Zimacs";
     if (titlebar.titleRect(app.font.widthOf(title), l, app.font)) |rect| {
@@ -969,7 +1036,12 @@ fn aboutUpdateLine() [:0]const u8 {
 /// The layout for this frame, sized to the buffer that is showing.
 pub fn currentLayout() Layout {
     const lines = if (app.buffer.current()) |v| v.tree.lineCount() else 1;
-    return Layout.compute(app.font.metrics, lines, app.buffer.views.items.len > 0, app.window.custom_frame);
+    return Layout.compute(app.font.metrics, .{
+        .line_count = lines,
+        .tabs = app.buffer.views.items.len > 0,
+        .titlebar = app.window.custom_frame,
+        .sidebar_columns = if (sidebarShowing()) app.config.sidebar_columns else 0,
+    });
 }
 
 fn syntaxColour(kind: syntax.Kind) pen.Color {
@@ -1009,6 +1081,16 @@ pub fn scrollToRow(view: *BufferView, l: Layout, cell: Metrics, row: u32) void {
 }
 
 const Segment = struct { text: [:0]const u8, colour: pen.Color };
+
+/// Room for one name in the folder tree.
+const max_row_label = 512;
+/// How far each level of the folder tree is set in, in columns.
+const sidebar_indent_columns = 1.5;
+
+/// Whether the folder tree takes room at the side.
+pub fn sidebarShowing() bool {
+    return app.sidebar.shown and app.workspace.root != null;
+}
 
 /// How round scrollbar thumbs and a tab's hovered close button are, and in
 /// how many segments raylib draws a rounded corner.

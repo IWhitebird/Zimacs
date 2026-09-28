@@ -40,6 +40,8 @@ pub const Extras = struct {
     /// Offset from the configured font size.
     zoom: f32 = 0,
     window: ?Placement = null,
+    /// The folder open as a project. Borrowed.
+    folder: ?[]const u8 = null,
 };
 
 /// Saves periodically, and only when the session has changed.
@@ -71,6 +73,8 @@ pub fn save(b: *Buffer, extras: Extras, io: std.Io, gpa: Allocator, dir: []const
     try appendLine(&index, gpa, "active\t{d}", .{b.active});
     try appendLine(&index, gpa, "zoom\t{d}", .{extras.zoom});
     try appendLine(&index, gpa, "texts\t{x}", .{mark});
+    // Last on its line, since a path may hold a tab.
+    if (extras.folder) |folder| try appendLine(&index, gpa, "folder\t{s}", .{folder});
     if (extras.window) |w| {
         try appendLine(&index, gpa, "window\t{d}\t{d}\t{d}\t{d}\t{d}", .{
             w.x, w.y, w.width, w.height, @intFromBool(w.maximized),
@@ -190,6 +194,21 @@ pub fn readExtras(io: std.Io, gpa: Allocator, dir: []const u8) Extras {
     return parseExtras(index);
 }
 
+/// The folder that was open, if any. Caller frees.
+pub fn readFolder(io: std.Io, gpa: Allocator, dir: []const u8) ?[]u8 {
+    var open = std.Io.Dir.cwd().openDir(io, dir, .{}) catch return null;
+    defer open.close(io);
+    const index = open.readFileAlloc(io, index_name, gpa, .limited(max_index_bytes)) catch return null;
+    defer gpa.free(index);
+    var lines = std.mem.splitScalar(u8, index, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        const prefix = "folder\t";
+        if (std.mem.startsWith(u8, line, prefix)) return gpa.dupe(u8, line[prefix.len..]) catch null;
+    }
+    return null;
+}
+
 /// Cheap summary of everything `save` writes.
 pub fn signature(b: *const Buffer, extras: Extras) u64 {
     var h = std.hash.Wyhash.init(0);
@@ -197,6 +216,7 @@ pub fn signature(b: *const Buffer, extras: Extras) u64 {
     hashValue(&h, b.views.items.len);
     hashValue(&h, @as(u32, @bitCast(extras.zoom)));
     if (extras.window) |w| hashValue(&h, w);
+    h.update(extras.folder orelse "");
     for (b.views.items) |view| {
         hashValue(&h, view.version);
         hashValue(&h, view.cursor.offset);
@@ -566,6 +586,25 @@ test "text from an earlier save or a closed tab does not stay on disk" {
     const back = try after.current().?.tree.allocText(testing.allocator);
     defer testing.allocator.free(back);
     try testing.expectEqualStrings("kept", back);
+}
+
+test "the open folder is kept, even one whose name holds a tab" {
+    var s = try Scratch.init();
+    defer s.deinit();
+    const session_dir = try s.join("session");
+    defer testing.allocator.free(session_dir);
+    var b = testBuffer();
+    defer freeBuffer(&b);
+    _ = try b.newScratch();
+
+    try save(&b, .{ .folder = "/home/me/odd\tname" }, testing.io, testing.allocator, session_dir);
+    const folder = readFolder(testing.io, testing.allocator, session_dir).?;
+    defer testing.allocator.free(folder);
+    try testing.expectEqualStrings("/home/me/odd\tname", folder);
+
+    try save(&b, .{}, testing.io, testing.allocator, session_dir);
+    try testing.expect(readFolder(testing.io, testing.allocator, session_dir) == null);
+    try testing.expect(signature(&b, .{}) != signature(&b, .{ .folder = "/x" }));
 }
 
 test "the signature moves with anything worth saving, and only then" {

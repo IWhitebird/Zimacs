@@ -23,6 +23,7 @@ const crash = @import("crash.zig");
 const report_mod = @import("report.zig");
 const system = @import("system.zig");
 const filedialog = @import("filedialog.zig");
+const foldersearch = @import("foldersearch.zig");
 const comment = @import("comment.zig");
 const updatelog = @import("updatelog.zig");
 
@@ -30,6 +31,11 @@ pub fn run(action: Action) !void {
     switch (action) {
         .new_tab => _ = try app.buffer.newScratch(),
         .open_file => try browse(null),
+        .open_folder => try chooseFolder(),
+        .close_folder => app.closeFolder(),
+        .quick_open => try quickOpen(),
+        .search_folder => try searchFolder(),
+        .toggle_sidebar => toggleSidebar(),
         .open_recent => try app.prompt.beginWith(.open, app.recent.items()),
         .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
@@ -143,6 +149,7 @@ pub fn finishFileDialog(outcome: filedialog.Outcome) void {
     defer app.gpa.free(path);
     switch (outcome.kind) {
         .open => app.openFile(path) catch |err| report("Could not open", err),
+        .folder => app.openFolder(path) catch |err| report("Could not open the folder", err),
         .save => {
             const p = pending_save orelse return;
             // The tab may have been closed while the dialog was up.
@@ -247,6 +254,103 @@ pub fn saveInBrowser(typed: []const u8) !void {
     defer app.gpa.free(full);
     app.prompt.cancel();
     saveViewAs(view, full);
+}
+
+/// Picks one of the folder's files by a few letters of its path. The folder
+/// is listed again each time, and the list swaps in once that is done.
+fn quickOpen() !void {
+    const io = app.io orelse return;
+    if (app.workspace.root == null) return tell(.info, "Open a folder first: File > Open Folder", .{});
+    app.workspace.refresh(io);
+    try app.prompt.beginWith(.quick_open, app.workspace.files());
+}
+
+/// A new listing of the folder is in; the old one's names are gone.
+pub fn folderListed() void {
+    if (!app.prompt.active) return;
+    switch (app.prompt.kind) {
+        .quick_open => app.prompt.replaceOptions(app.workspace.files()) catch app.prompt.cancel(),
+        // It may have started before there was a listing to search.
+        .search_folder => searchQueryEdited(),
+        else => {},
+    }
+}
+
+/// Searches every file of the folder, again as the query is typed. Opens
+/// on the last query and its hits.
+fn searchFolder() !void {
+    if (app.workspace.root == null) return tell(.info, "Open a folder first: File > Open Folder", .{});
+    try app.prompt.begin(.search_folder, app.folder_search.query.items);
+    try app.prompt.replaceOptions(app.folder_search.labels());
+}
+
+/// The query changed: search again, with unsaved tabs as they are now.
+pub fn searchQueryEdited() void {
+    const io = app.io orelse return;
+    const root = app.workspace.root orelse return;
+    // The hits the prompt shows are about to be freed.
+    app.prompt.replaceOptions(&.{}) catch {};
+
+    var unsaved: std.ArrayList(foldersearch.Unsaved) = .empty;
+    defer {
+        for (unsaved.items) |u| app.gpa.free(u.text);
+        unsaved.deinit(app.gpa);
+    }
+    for (app.buffer.views.items) |view| {
+        if (!view.edited()) continue;
+        const relative = app.workspace.relativeOf(view.path orelse continue) orelse continue;
+        const text = view.tree.allocText(app.gpa) catch continue;
+        unsaved.append(app.gpa, .{ .path = relative, .text = text }) catch app.gpa.free(text);
+    }
+    app.folder_search.start(io, root, app.workspace.files(), unsaved.items, app.prompt.text(), .{}) catch |err|
+        report("Could not search", err);
+}
+
+/// The hits of the current query are in.
+pub fn folderSearched() void {
+    if (app.prompt.active and app.prompt.kind == .search_folder) {
+        app.prompt.replaceOptions(app.folder_search.labels()) catch app.prompt.cancel();
+    }
+}
+
+/// Opens the file of search hit `index` with its match selected.
+pub fn openHit(index: usize) void {
+    const hits = app.folder_search.hits();
+    if (index >= hits.len) return;
+    const hit = hits[index];
+    openInFolder(hit.path);
+    const view = app.buffer.current() orelse return;
+    const tree = &view.tree;
+    const line = @min(hit.line, tree.lineCount() - 1);
+    const start = @min(tree.lineStart(line) + hit.column, tree.lineEnd(line));
+    const end = @min(start + @as(u32, @intCast(app.folder_search.query.items.len)), tree.lineEnd(line));
+    view.cursor.moveTo(tree, start, false);
+    view.cursor.moveTo(tree, end, true);
+}
+
+/// Opens a file of the folder, given relative to it.
+pub fn openInFolder(relative: []const u8) void {
+    const path = app.workspace.absolute(app.gpa, relative) catch |err| return report("Could not open", err);
+    defer app.gpa.free(path);
+    app.openFile(path) catch |err| report("Could not open", err);
+}
+
+fn toggleSidebar() void {
+    if (app.workspace.root == null) return tell(.info, "Open a folder first: File > Open Folder", .{});
+    app.sidebar.shown = !app.sidebar.shown;
+    app.refreshSidebar();
+}
+
+/// Asks for a folder to open as the project, in the system's dialog or else
+/// by typing its path.
+fn chooseFolder() !void {
+    const io = app.io orelse return;
+    const start = app.workspace.root orelse ".";
+    switch (app.file_dialog.show(app.gpa, io, .{ .kind = .folder, .dir = start })) {
+        .shown => {},
+        .busy => tell(.info, dialog_open, .{}),
+        .unavailable => try app.prompt.begin(.open_folder, start),
+    }
 }
 
 /// Opens the file browser, starting beside the current file.
@@ -410,6 +514,7 @@ fn toggleWrap() void {
 pub fn checked(action: Action) bool {
     return switch (action) {
         .toggle_wrap => app.config.wrap_lines,
+        .toggle_sidebar => app.sidebar.shown and app.workspace.root != null,
         else => false,
     };
 }

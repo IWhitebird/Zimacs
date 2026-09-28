@@ -4,14 +4,25 @@
 
 const std = @import("std");
 const text_mod = @import("text.zig");
+const fuzzy = @import("fuzzy.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { open, save_as, browse, save_into, goto_line };
+pub const Kind = enum { open, open_folder, quick_open, search_folder, save_as, browse, save_into, goto_line };
 
 /// Case-insensitive substring test, for narrowing the suggestion list.
 fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.ascii.findIgnoreCase(haystack, needle) != null;
 }
+
+const Ranked = struct {
+    index: usize,
+    score: i32,
+
+    /// Higher scores first; the sort is stable, so ties keep path order.
+    fn better(_: void, a: Ranked, b: Ranked) bool {
+        return a.score > b.score;
+    }
+};
 
 pub const Prompt = struct {
     gpa: Allocator = undefined,
@@ -22,8 +33,12 @@ pub const Prompt = struct {
     options: []const []const u8 = &.{},
     /// Indices into `options` that match what has been typed so far.
     matches: std.ArrayList(usize) = .empty,
-    /// Which match is highlighted.
+    /// Quick open's matches with their scores, while they are sorted.
+    ranked: std.ArrayList(Ranked) = .empty,
+    /// Which match is highlighted, counting through all of them.
     option: usize = 0,
+    /// The first match in view; the list scrolls past `max_shown`.
+    first: usize = 0,
     /// The highlight was moved there with the arrows or the mouse, rather
     /// than resting on the first match.
     picked: bool = false,
@@ -36,6 +51,7 @@ pub const Prompt = struct {
     pub fn deinit(p: *Self) void {
         p.input.deinit(p.gpa);
         p.matches.deinit(p.gpa);
+        p.ranked.deinit(p.gpa);
     }
 
     pub fn begin(p: *Self, kind: Kind, initial: []const u8) !void {
@@ -56,49 +72,90 @@ pub const Prompt = struct {
         try p.refilter();
     }
 
-    /// Narrows the list to whatever contains the typed text, case-insensitively.
+    /// Swaps in a newer list of suggestions, keeping what has been typed.
+    pub fn replaceOptions(p: *Self, options: []const []const u8) !void {
+        p.options = options;
+        try p.refilter();
+    }
+
+    /// Narrows the list to whatever contains the typed text, case-insensitively;
+    /// quick open ranks its files instead.
     fn refilter(p: *Self) !void {
         p.matches.clearRetainingCapacity();
-        for (p.options, 0..) |option, i| {
-            if (contains(option, p.input.items)) try p.matches.append(p.gpa, i);
+        switch (p.kind) {
+            .quick_open => try p.rank(),
+            // The typed text is what was searched for, not a filter.
+            .search_folder => for (0..p.options.len) |i| try p.matches.append(p.gpa, i),
+            else => for (p.options, 0..) |option, i| {
+                if (contains(option, p.input.items)) try p.matches.append(p.gpa, i);
+            },
         }
         p.option = 0;
+        p.first = 0;
         p.picked = false;
+    }
+
+    /// The best matches first, for picking a file by a few of its letters.
+    fn rank(p: *Self) !void {
+        p.ranked.clearRetainingCapacity();
+        for (p.options, 0..) |option, i| {
+            if (fuzzy.score(option, p.input.items)) |s| try p.ranked.append(p.gpa, .{ .index = i, .score = s });
+        }
+        std.mem.sort(Ranked, p.ranked.items, {}, Ranked.better);
+        for (p.ranked.items) |r| try p.matches.append(p.gpa, r.index);
     }
 
     /// How many matches the list is showing.
     pub fn shown(p: Self) usize {
-        return @min(p.matches.items.len, max_shown);
+        return @min(p.matches.items.len -| p.first, max_shown);
     }
 
-    /// Moves the highlight through the shown matches, wrapping at both ends.
+    /// The matches in view, as indices into `options`.
+    pub fn visible(p: *const Self) []const usize {
+        return p.matches.items[p.first..][0..p.shown()];
+    }
+
+    /// Moves the highlight through the matches, wrapping at both ends and
+    /// scrolling to keep it in view.
     pub fn cycle(p: *Self, delta: i32) void {
-        if (p.shown() == 0) return;
-        const count: i32 = @intCast(p.shown());
-        p.option = @intCast(@mod(@as(i32, @intCast(p.option)) + delta, count));
+        const count = p.matches.items.len;
+        if (count == 0) return;
+        p.option = @intCast(@mod(@as(i64, @intCast(p.option)) + delta, @as(i64, @intCast(count))));
         p.picked = true;
+        if (p.option < p.first) p.first = p.option;
+        if (p.option >= p.first + max_shown) p.first = p.option + 1 - max_shown;
     }
 
-    /// Highlights a shown row, as a click does.
+    /// Scrolls the list by `delta` rows without moving the highlight.
+    pub fn scrollBy(p: *Self, delta: i32) void {
+        const last = p.matches.items.len -| max_shown;
+        p.first = @intCast(std.math.clamp(@as(i64, @intCast(p.first)) + delta, 0, @as(i64, @intCast(last))));
+    }
+
+    /// Highlights a row in view, as a click does.
     pub fn pick(p: *Self, row: usize) void {
         if (row >= p.shown()) return;
-        p.option = row;
+        p.option = p.first + row;
         p.picked = true;
     }
 
-    /// Which shown row is highlighted. Saving highlights nothing until a row
-    /// is picked, because a match only contains the typed name: taking it
-    /// would save over a different file.
+    /// Which match is highlighted. Saving highlights nothing until a row is
+    /// picked, because a match only contains the typed name: taking it would
+    /// save over a different file.
     pub fn highlighted(p: Self) ?usize {
-        if (p.option >= p.shown()) return null;
+        if (p.option >= p.matches.items.len) return null;
         if (p.kind == .save_into and !p.picked) return null;
         return p.option;
     }
 
+    /// The highlighted suggestion's place in `options`.
+    pub fn chosenOption(p: Self) ?usize {
+        return p.matches.items[p.highlighted() orelse return null];
+    }
+
     /// The suggestion currently highlighted, if any.
     fn choice(p: Self) ?[]const u8 {
-        const row = p.highlighted() orelse return null;
-        return p.options[p.matches.items[row]];
+        return p.options[p.chosenOption() orelse return null];
     }
 
     /// What picking right now would use: the highlighted suggestion, or the
@@ -126,6 +183,9 @@ pub const Prompt = struct {
     pub fn label(p: Self) []const u8 {
         return switch (p.kind) {
             .open => "Open: ",
+            .open_folder => "Open folder: ",
+            .quick_open => "Go to file: ",
+            .search_folder => "Search folder: ",
             .save_as => "Save as: ",
             .goto_line => "Go to line: ",
             // The browsers show the directory they are in instead.
@@ -261,7 +321,7 @@ test "saving takes the typed name, not a file that merely contains it" {
     try std.testing.expectEqualSlices(u8, "changelog.txt", p.result());
 }
 
-test "the highlight stays on the rows that are shown" {
+test "the highlight wraps through every match, and the list scrolls to show it" {
     var p = Prompt{ .gpa = std.testing.allocator };
     defer p.deinit();
 
@@ -269,7 +329,14 @@ test "the highlight stays on the rows that are shown" {
     for (&options) |*o| o.* = "same";
     try p.beginWith(.open, &options);
     p.cycle(-1);
-    try std.testing.expectEqual(@as(?usize, Prompt.max_shown - 1), p.highlighted());
+    try std.testing.expectEqual(@as(?usize, options.len - 1), p.highlighted());
+    try std.testing.expectEqual(@as(usize, options.len - Prompt.max_shown), p.first);
     p.cycle(1);
     try std.testing.expectEqual(@as(?usize, 0), p.highlighted());
+    try std.testing.expectEqual(@as(usize, 0), p.first);
+
+    p.scrollBy(100);
+    try std.testing.expectEqual(@as(usize, options.len - Prompt.max_shown), p.first);
+    p.pick(1);
+    try std.testing.expectEqual(@as(?usize, options.len - Prompt.max_shown + 1), p.highlighted());
 }

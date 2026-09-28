@@ -13,6 +13,10 @@ const Layout = layout.Layout;
 pub const Action = enum {
     new_tab,
     open_file,
+    open_folder,
+    close_folder,
+    quick_open,
+    search_folder,
     open_recent,
     save,
     save_as,
@@ -41,6 +45,7 @@ pub const Action = enum {
     goto_line,
 
     toggle_wrap,
+    toggle_sidebar,
     zoom_in,
     zoom_out,
     zoom_reset,
@@ -68,6 +73,9 @@ pub const bar = [_]Group{
     .{ .title = "File", .entries = &.{
         .{ .label = "New Tab", .shortcut = "Ctrl+N", .action = .new_tab },
         .{ .label = "Open...", .shortcut = "Ctrl+O", .action = .open_file },
+        .{ .label = "Open Folder...", .shortcut = "Ctrl+Shift+O", .action = .open_folder },
+        .{ .label = "Go to File...", .shortcut = "Ctrl+P", .action = .quick_open },
+        .{ .label = "Close Folder", .action = .close_folder },
         .{ .label = "Open Recent", .shortcut = "Ctrl+R", .action = .open_recent },
         .{ .label = "Save", .shortcut = "Ctrl+S", .action = .save },
         .{ .label = "Save As...", .shortcut = "Ctrl+Shift+S", .action = .save_as },
@@ -82,6 +90,7 @@ pub const bar = [_]Group{
         .{ .label = "Select All", .shortcut = "Ctrl+A", .action = .select_all },
         .{ .label = "Find...", .shortcut = "Ctrl+F", .action = .find },
         .{ .label = "Replace...", .shortcut = "Ctrl+H", .action = .replace },
+        .{ .label = "Find in Folder...", .shortcut = "Ctrl+Shift+F", .action = .search_folder },
         .{ .label = "Find Next", .shortcut = "F3", .action = .find_next },
         .{ .label = "Find Previous", .shortcut = "Shift+F3", .action = .find_previous },
         .{ .label = "Go to Line...", .shortcut = "Ctrl+G", .action = .goto_line },
@@ -97,6 +106,7 @@ pub const bar = [_]Group{
     } },
     .{ .title = "View", .entries = &.{
         .{ .label = "Word Wrap", .shortcut = "Alt+Z", .action = .toggle_wrap, .checkable = true },
+        .{ .label = "Folder Tree", .shortcut = "Ctrl+B", .action = .toggle_sidebar, .checkable = true },
         .{ .label = "Zoom In", .shortcut = "Ctrl+=", .action = .zoom_in },
         .{ .label = "Zoom Out", .shortcut = "Ctrl+-", .action = .zoom_out },
         .{ .label = "Reset Zoom", .shortcut = "Ctrl+0", .action = .zoom_reset },

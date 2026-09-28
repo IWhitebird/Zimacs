@@ -40,6 +40,10 @@ const Find = @import("core/find.zig").Find;
 const Dialog = @import("core/dialog.zig").Dialog;
 const Notice = @import("core/notice.zig").Notice;
 const FileDialog = @import("core/filedialog.zig").Dialog;
+const Workspace = @import("core/workspace.zig").Workspace;
+const Sidebar = @import("core/sidebar.zig").Sidebar;
+const FolderSearch = @import("core/foldersearch.zig").FolderSearch;
+const native = @import("core/native.zig");
 
 const leak_checks = builtin.mode == .Debug;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -91,6 +95,9 @@ pub var find = Find{};
 pub var dialog = Dialog{};
 pub var notice = Notice{};
 pub var file_dialog = FileDialog{};
+pub var workspace = Workspace{ .gpa = gpa, .on_listed = native.wake };
+pub var sidebar = Sidebar{ .gpa = gpa };
+pub var folder_search = FolderSearch{ .gpa = gpa, .on_found = native.wake };
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
@@ -116,6 +123,9 @@ pub fn run(start: Start) !void {
     defer browser.deinit();
     find.gpa = gpa;
     defer find.deinit();
+    defer workspace.deinit();
+    defer sidebar.deinit();
+    defer folder_search.deinit();
     defer if (config_path) |p| gpa.free(p);
 
     const config_failure = loadConfig(start);
@@ -190,9 +200,14 @@ pub fn run(start: Start) !void {
 
     while (!window.shouldClose()) {
         if (session_dir) |d| if (autosave.due(pen.getTime(), &buffer, currentExtras())) saveSession(d);
-        if (disk_watch.due(pen.getTime())) commands.checkDisk();
+        if (disk_watch.due(pen.getTime())) {
+            commands.checkDisk();
+            refreshSidebar();
+        }
         if (update_schedule.due(pen.getTime(), &update)) commands.updateInBackground();
         if (file_dialog.take()) |outcome| commands.finishFileDialog(outcome);
+        if (workspace.poll()) commands.folderListed();
+        if (folder_search.poll()) commands.folderSearched();
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
         // Before drawing too: the atlas cannot change under a frame using it.
@@ -219,7 +234,7 @@ fn lastExtras(session_dir: ?[]const u8) session.Extras {
 }
 
 fn currentExtras() session.Extras {
-    return .{ .zoom = font.zoom(), .window = window.placement() };
+    return .{ .zoom = font.zoom(), .window = window.placement(), .folder = workspace.root };
 }
 
 fn saveSession(d: []const u8) void {
@@ -237,23 +252,23 @@ fn saveSession(d: []const u8) void {
 fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
     // iterateAllocator rather than iterate: on Windows the plain one refuses,
     // because the command line has to be decoded from WTF-16 first.
+    // The last session comes back first, so text it holds unsaved is not
+    // lost to a file named on the command line; those open on top.
+    if (config.restore_session) if (session_dir) |dir| if (io) |active_io| {
+        _ = session.restore(&buffer, active_io, gpa, dir) catch false;
+        if (session.readFolder(active_io, gpa, dir)) |folder| {
+            defer gpa.free(folder);
+            openFolder(folder) catch {};
+        }
+    };
+
     var args = try start.args.iterateAllocator(gpa);
     defer args.deinit();
     _ = args.next(); // program name
-    var opened: usize = 0;
     while (args.next()) |path| {
-        openFile(path) catch |err| {
-            commands.tell(.problem, "Could not open {s}: {s}", .{ path, @errorName(err) });
-            continue;
-        };
-        opened += 1;
+        openPath(path) catch |err| commands.tell(.problem, "Could not open {s}: {s}", .{ path, @errorName(err) });
     }
-    if (opened > 0) return;
-
-    if (config.restore_session) if (session_dir) |dir| if (io) |active_io| {
-        const restored = session.restore(&buffer, active_io, gpa, dir) catch false;
-        if (restored) return;
-    };
+    if (buffer.views.items.len > 0) return;
 
     // The web build has no files or session, so it opens a welcome text.
     if (on_web) {
@@ -289,6 +304,35 @@ fn reportFrameError(who: []const u8, err: anyerror) void {
 
 /// Opens a file and remembers it. Every way of opening goes through here so
 /// the recent list cannot drift out of date.
+/// A folder becomes the project, and a file opens in a tab.
+pub fn openPath(path: []const u8) !void {
+    const active_io = io orelse return openFile(path);
+    const st = std.Io.Dir.cwd().statFile(active_io, path, .{}) catch return openFile(path);
+    if (st.kind == .directory) return openFolder(path);
+    return openFile(path);
+}
+
+pub fn openFolder(path: []const u8) !void {
+    try workspace.open(io orelse return error.NoFilesystem, path);
+    folder_search.stop();
+    sidebar.forget();
+    sidebar.shown = true;
+    refreshSidebar();
+}
+
+pub fn closeFolder() void {
+    folder_search.stop();
+    workspace.close();
+    sidebar.forget();
+}
+
+/// Reads the folder tree again, so it shows files made or removed since.
+pub fn refreshSidebar() void {
+    const root = workspace.root orelse return;
+    if (!sidebar.shown) return;
+    sidebar.refresh(io orelse return, root);
+}
+
 pub fn openFile(path: []const u8) !void {
     try buffer.openOrSelect(path);
     // As the buffer stored it: absolute, so it means the same file later.

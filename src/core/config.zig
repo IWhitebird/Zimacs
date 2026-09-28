@@ -73,6 +73,8 @@ pub const Config = struct {
     wrap_lines: bool = false,
     /// List dot-files in the file browser.
     show_hidden: bool = false,
+    /// Width of the folder tree, in columns of text.
+    sidebar_columns: u16 = 30,
     /// Draw our own title bar instead of the operating system's frame.
     custom_titlebar: bool = true,
     /// Install new releases in the background. Only official builds ever do.
@@ -214,6 +216,9 @@ const default_text = blk: {
         \\# Show dot-files in the file browser.
         \\show_hidden = {}
         \\
+        \\# Width of the folder tree, in columns of text.
+        \\sidebar_columns = {d}
+        \\
         \\# Draw Zimacs's own title bar. Set to false for your system's window
         \\# frame instead. Takes effect the next time Zimacs starts.
         \\custom_titlebar = {}
@@ -224,9 +229,9 @@ const default_text = blk: {
         \\
         \\
     , .{
-        d.font_size,       @tagName(d.caret_style), d.tab_width,  d.expand_tabs,
-        d.auto_close,      d.restore_session,       d.wrap_lines, d.show_hidden,
-        d.custom_titlebar, d.auto_update,
+        d.font_size,       @tagName(d.caret_style), d.tab_width,   d.expand_tabs,
+        d.auto_close,      d.restore_session,       d.wrap_lines,  d.show_hidden,
+        d.sidebar_columns, d.custom_titlebar,       d.auto_update,
     });
     for (@typeInfo(Colors).@"struct".fields) |field| {
         text = text ++ std.fmt.comptimePrint("{s} = #{x:0>6}\n", .{ field.name, @field(d.colors, field.name) });

@@ -300,7 +300,7 @@ fn openDroppedFiles() void {
 
     for (0..dropped.count) |i| {
         const path: [:0]const u8 = std.mem.span(dropped.paths[i]);
-        app.openFile(path) catch |err| {
+        app.openPath(path) catch |err| {
             commands.tell(.problem, "Could not open {s}: {s}", .{ path, @errorName(err) });
         };
     }

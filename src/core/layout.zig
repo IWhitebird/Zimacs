@@ -20,41 +20,56 @@ const min_digits: u32 = 3;
 
 pub const Layout = struct {
     menu: pen.Rectangle,
+    /// The folder tree down the left; empty when it is not showing.
+    sidebar: pen.Rectangle = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
     tabs: pen.Rectangle,
     gutter: pen.Rectangle,
     text: pen.Rectangle,
     scrollbar: pen.Rectangle,
     status: pen.Rectangle,
 
-    /// `titlebar` is set when the menu row is also the window's title bar,
-    /// which wants to be a little taller than a menu on its own.
-    pub fn compute(cell: Metrics, line_count: u32, show_tabs: bool, titlebar: bool) Layout {
+    pub const Options = struct {
+        line_count: u32,
+        /// There are tabs to show.
+        tabs: bool,
+        /// The menu row is also the window's title bar, which wants to be a
+        /// little taller than a menu on its own.
+        titlebar: bool,
+        /// Columns of the folder tree, or 0 when it is not showing.
+        sidebar_columns: u32 = 0,
+    };
+
+    pub fn compute(cell: Metrics, o: Options) Layout {
         // Logical units, the ones raylib draws and reports the mouse in. The
         // render size is physical pixels, which differ on a scaled display.
         const width: f32 = @floatFromInt(pen.getScreenWidth());
         const height: f32 = @floatFromInt(pen.getScreenHeight());
 
-        const menu_height = cell.height + padding * @as(f32, if (titlebar) 2 else 1);
-        const tab_height = if (show_tabs) cell.height + padding * 1.5 else 0;
+        const menu_height = cell.height + padding * @as(f32, if (o.titlebar) 2 else 1);
+        const tab_height = if (o.tabs) cell.height + padding * 1.5 else 0;
         const status_height = cell.height + padding;
         const body_top = menu_height + tab_height;
         const body_height = @max(height - body_top - status_height, 0);
-        const gutter_width = @as(f32, @floatFromInt(@max(min_digits, digits(line_count)))) *
+        // Never so wide that the text has no room.
+        const sidebar_width = @min(@as(f32, @floatFromInt(o.sidebar_columns)) * cell.width, width / 2);
+        const gutter_width = @as(f32, @floatFromInt(@max(min_digits, digits(o.line_count)))) *
             cell.width + padding * 2;
+        const text_x = sidebar_width + gutter_width;
 
         return .{
             .menu = .{ .x = 0, .y = 0, .width = width, .height = menu_height },
-            .tabs = .{ .x = 0, .y = menu_height, .width = width, .height = tab_height },
+            .sidebar = .{ .x = 0, .y = menu_height, .width = sidebar_width, .height = @max(height - menu_height - status_height, 0) },
+            .tabs = .{ .x = sidebar_width, .y = menu_height, .width = @max(width - sidebar_width, 0), .height = tab_height },
             .gutter = .{
-                .x = 0,
+                .x = sidebar_width,
                 .y = body_top,
-                .width = @min(gutter_width, width),
+                .width = @min(gutter_width, @max(width - sidebar_width, 0)),
                 .height = body_height,
             },
             .text = .{
-                .x = gutter_width,
+                .x = text_x,
                 .y = body_top,
-                .width = @max(width - gutter_width - scrollbar_width, 0),
+                .width = @max(width - text_x - scrollbar_width, 0),
                 .height = body_height,
             },
             .scrollbar = .{
@@ -174,7 +189,7 @@ const prompt_min_width = 320;
 pub fn promptPanel(l: Layout, cell: Metrics, rows: usize) pen.Rectangle {
     const width = @min(@max(l.text.width * prompt_share, prompt_min_width), l.text.width - padding * 2);
     const height = cell.height + padding * 2 +
-        @as(f32, @floatFromInt(rows)) * promptRowHeight(cell);
+        @as(f32, @floatFromInt(rows)) * listRowHeight(cell);
     return .{
         .x = l.text.x + (l.text.width - width) / 2,
         .y = l.text.y + padding * 2,
@@ -183,7 +198,13 @@ pub fn promptPanel(l: Layout, cell: Metrics, rows: usize) pen.Rectangle {
     };
 }
 
-pub fn promptRowHeight(cell: Metrics) f32 {
+/// Where the folder tree's rows start: under the one naming the folder.
+pub fn sidebarRowsTop(l: Layout, cell: Metrics) f32 {
+    return l.sidebar.y + listRowHeight(cell);
+}
+
+/// A row of a list: the prompt's suggestions, or the folder tree.
+pub fn listRowHeight(cell: Metrics) f32 {
     return cell.height + padding * 0.5;
 }
 
@@ -199,7 +220,7 @@ pub fn promptRowAt(l: Layout, cell: Metrics, shown: usize, point: pen.Vector2) ?
 }
 
 pub fn promptRow(panel: pen.Rectangle, cell: Metrics, row: usize) pen.Rectangle {
-    const height = promptRowHeight(cell);
+    const height = listRowHeight(cell);
     return .{
         .x = panel.x,
         .y = panel.y + cell.height + padding * 2 + @as(f32, @floatFromInt(row)) * height,
