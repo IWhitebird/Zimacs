@@ -514,12 +514,14 @@ pub const Buffer = struct {
         defer b.gpa.free(raw);
 
         const decoded = try textfile.decode(b.gpa, raw);
-        defer b.gpa.free(decoded.text);
+        // The tree takes the decoded text over, so it frees it from here on.
+        var tree = try PieceTree.initOwned(b.gpa, decoded.text);
+        errdefer tree.deinit();
 
         const name = try b.gpa.dupe(u8, std.fs.path.basename(owned_path));
         errdefer b.gpa.free(name);
 
-        const view = try b.add(try PieceTree.initFromBytes(b.gpa, decoded.text), owned_path, name);
+        const view = try b.add(tree, owned_path, name);
         view.format = decoded.format;
         view.disk = stamp;
     }
@@ -536,7 +538,17 @@ pub const Buffer = struct {
 
         const caret = view.cursor.offset;
         const top = view.top_line;
-        try view.edit(0, view.tree.len(), decoded.text);
+        // Only the part that differs, so a file that grew, like a log, costs
+        // its new text rather than the whole of it twice over in the history.
+        const old = try view.tree.allocText(b.gpa);
+        defer b.gpa.free(old);
+        const new = decoded.text;
+        const head = std.mem.indexOfDiff(u8, old, new) orelse old.len;
+        if (head < old.len or head < new.len) {
+            var tail: usize = 0;
+            while (tail < old.len - head and tail < new.len - head and old[old.len - 1 - tail] == new[new.len - 1 - tail]) tail += 1;
+            try view.edit(@intCast(head), @intCast(old.len - head - tail), new[head .. new.len - tail]);
+        }
         view.cursor.moveTo(&view.tree, @min(caret, view.tree.len()), false);
         view.top_line = @min(top, view.tree.lineCount() -| 1);
         view.followed = view.cursor.offset;
@@ -1216,4 +1228,31 @@ test "a file opened by a relative path is stored by its absolute one" {
     // The same file named either way is the same tab.
     try b.openOrSelect(stored);
     try testing.expectEqual(@as(usize, 1), b.views.items.len);
+}
+
+test "reloading a file that grew keeps only the new part in the history" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "log.txt", .data = "one\ntwo\n" });
+    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const dir = dir_buf[0..try tmp.dir.realPath(io, &dir_buf)];
+    const path = try std.fs.path.join(gpa, &.{ dir, "log.txt" });
+    defer gpa.free(path);
+
+    var b = Buffer{ .gpa = gpa, .io = io };
+    defer Buffer.deinit(@ptrCast(&b));
+    try b.openOrSelect(path);
+    const v = b.current().?;
+    try tmp.dir.writeFile(io, .{ .sub_path = "log.txt", .data = "one\ntwo\nthree\n" });
+    try b.reload(v);
+
+    const all = try v.tree.allocText(gpa);
+    defer gpa.free(all);
+    try testing.expectEqualStrings("one\ntwo\nthree\n", all);
+    const last = v.history.edits.items[v.history.edits.items.len - 1];
+    try testing.expectEqualStrings("three\n", last.inserted);
+    try testing.expectEqualStrings("", last.removed);
+    try testing.expect(!v.edited());
 }

@@ -22,8 +22,12 @@ pub const Span = struct { start: u32, end: u32, kind: Kind };
 /// text's size in memory.
 pub const max_bytes = 16 * 1024 * 1024;
 
-/// How much text one `step` parses before handing back to the editor.
-const bytes_per_step = 96 * 1024;
+/// How much one `step` parses before handing back to the editor, in
+/// Tree-sitter's progress checks, which come after a fixed amount of work
+/// rather than of text: about 10 ms, or 100 KB of fresh C, here. Counting
+/// bytes instead let a cheap edit, whose reparse skips ahead over reused
+/// text, take many frames.
+const checks_per_step = 500;
 /// Captures longer than this are never compared against a predicate.
 const max_predicate_text = 256;
 
@@ -202,17 +206,14 @@ fn outerFirst(_: void, a: Span, b: Span) bool {
     return a.start < b.start or (a.start == b.start and a.end > b.end);
 }
 
-/// Stops a parse once it has read a slice of new text.
+/// Stops a parse once it has done a slice of work.
 const Progress = struct {
-    first: ?u32 = null,
+    checks: u32 = 0,
 
     fn check(state: *ts.ParseState) callconv(.c) bool {
         const p: *Progress = @ptrCast(@alignCast(state.payload.?));
-        const first = p.first orelse {
-            p.first = state.current_byte_offset;
-            return false;
-        };
-        return state.current_byte_offset -| first >= bytes_per_step;
+        p.checks += 1;
+        return p.checks >= checks_per_step;
     }
 };
 
@@ -312,6 +313,9 @@ fn captureText(match: ts.QueryMatch, capture: u32, text: *const PieceTree, buf: 
         const from = ts.ts_node_start_byte(c.node);
         const to = ts.ts_node_end_byte(c.node);
         if (to - from > buf.len) return null;
+        // Usually inside one piece, so readable in place.
+        const chunk = text.chunkAt(from);
+        if (chunk.len >= to - from) return chunk[0 .. to - from];
         var i: u32 = from;
         while (i < to) : (i += 1) buf[i - from] = text.byteAt(i) orelse return null;
         return buf[0 .. to - from];
@@ -434,10 +438,13 @@ test "a C file is coloured, and an edit is picked up by the next parse" {
     try testing.expectEqualStrings("\"s\"|", out.items);
 }
 
+/// Several steps' worth of C.
+const large_test_file = 1024 * 1024;
+
 test "a large file parses a slice at a time" {
     var big: std.ArrayList(u8) = .empty;
     defer big.deinit(testing.allocator);
-    while (big.items.len < bytes_per_step * 4) try big.appendSlice(testing.allocator, "int f(int x) { return x + 1; }\n");
+    while (big.items.len < large_test_file) try big.appendSlice(testing.allocator, "int f(int x) { return x + 1; }\n");
     var text = try PieceTree.initFromBytes(testing.allocator, big.items);
     defer text.deinit();
     const s = Syntax.create(testing.allocator, language.detect("x.c")).?;

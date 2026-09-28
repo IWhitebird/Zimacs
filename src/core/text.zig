@@ -97,6 +97,53 @@ pub fn characterAt(line: []const u8, column: u32, tab_width: u8) struct { offset
     return .{ .offset = @intCast(i), .column = at };
 }
 
+/// What to draw of `line` for columns `from` up to `to`, with the line's
+/// whole width: `characterAt(from)`, `offsetOf(to)` and `width` in one pass,
+/// since a line can be megabytes long.
+pub const Window = struct { first: u32, first_column: u32, last: u32, width: u32 };
+
+pub fn window(line: []const u8, from: u32, to: u32, tab_width: u8) Window {
+    var out = Window{ .first = @intCast(line.len), .first_column = 0, .last = @intCast(line.len), .width = 0 };
+    var first_found = false;
+    var last_found = false;
+    var column: u32 = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        const ch = decode(line, i);
+        const advance = if (line[i] == '\t') tabAdvance(column, tab_width) else columnsFor(ch.code);
+        if (!first_found and column + advance > from) {
+            out.first = @intCast(i);
+            out.first_column = column;
+            first_found = true;
+        }
+        if (!last_found and column >= to) {
+            out.last = @intCast(i);
+            last_found = true;
+        }
+        column += advance;
+        i += ch.len;
+    }
+    if (!first_found) out.first_column = column;
+    out.width = column;
+    return out;
+}
+
+/// `offsetOf` for each of `columns`, which rise, into `out`, in one pass.
+/// Returns the line's width.
+pub fn offsetsAt(gpa: std.mem.Allocator, line: []const u8, columns: []const u32, tab_width: u8, out: *std.ArrayList(u32)) !u32 {
+    out.clearRetainingCapacity();
+    var column: u32 = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        while (out.items.len < columns.len and columns[out.items.len] <= column) try out.append(gpa, @intCast(i));
+        const ch = decode(line, i);
+        column += if (line[i] == '\t') tabAdvance(column, tab_width) else columnsFor(ch.code);
+        i += ch.len;
+    }
+    while (out.items.len < columns.len) try out.append(gpa, @intCast(line.len));
+    return column;
+}
+
 /// Total columns `line` occupies.
 pub fn width(line: []const u8, tab_width: u8) u32 {
     return columnOf(line, line.len, tab_width);
@@ -238,6 +285,34 @@ test "the character over a column can start before it" {
     try testing.expectEqual(@as(u32, 7), characterAt(line, 7, 4).offset);
     try testing.expectEqual(@as(u32, line.len), characterAt(line, 99, 4).offset);
     try testing.expectEqual(@as(u32, 8), characterAt(line, 99, 4).column);
+}
+
+test "one pass gives what the three separate ones do" {
+    const lines = [_][]const u8{ "", "abc", "a\tb\u{1F600}c\td", "\t\t\u{e9}\u{e9}xyz", "\u{1F600}\u{1F600}" };
+    for (lines) |line| {
+        var from: u32 = 0;
+        while (from <= width(line, 4) + 1) : (from += 1) {
+            var to = from;
+            while (to <= width(line, 4) + 2) : (to += 1) {
+                const w = window(line, from, to, 4);
+                const c = characterAt(line, from, 4);
+                try testing.expectEqual(c.offset, w.first);
+                try testing.expectEqual(c.column, w.first_column);
+                try testing.expectEqual(offsetOf(line, to, 4), w.last);
+                try testing.expectEqual(width(line, 4), w.width);
+            }
+        }
+    }
+}
+
+test "offsets for several columns come from one pass" {
+    const gpa = testing.allocator;
+    var out: std.ArrayList(u32) = .empty;
+    defer out.deinit(gpa);
+    const line = "a\tb\u{1F600}c\td";
+    const columns = [_]u32{ 0, 1, 4, 5, 7, 8, 12, 20 };
+    try testing.expectEqual(width(line, 4), try offsetsAt(gpa, line, &columns, 4, &out));
+    for (columns, out.items) |c, got| try testing.expectEqual(offsetOf(line, c, 4), got);
 }
 
 test "expand turns tabs into spaces" {

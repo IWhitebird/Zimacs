@@ -48,8 +48,13 @@ pub const Find = struct {
     snapshot_version: u64 = 0,
     total: usize = 0,
     counted_for: ?u64 = null,
+    /// Which match the selection is, kept until the count or the selection
+    /// moves, since working it out walks the document.
+    ordinal: ?usize = null,
+    ordinal_for: ?OrdinalKey = null,
 
     const Self = @This();
+    const OrdinalKey = struct { count: u64, start: u32 };
 
     pub fn deinit(f: *Self) void {
         f.query.deinit(f.gpa);
@@ -106,6 +111,7 @@ pub const Find = struct {
             f.snapshot_of = view.id;
             f.snapshot_version = view.version;
             f.counted_for = null;
+            f.ordinal_for = null;
         }
         const key = f.countKey();
         if (f.counted_for != key) {
@@ -115,17 +121,26 @@ pub const Find = struct {
     }
 
     /// Which match the selection is, counting from 1, for "3 of 17".
-    pub fn current(f: *const Self, view: *const BufferView) ?usize {
+    pub fn current(f: *Self, view: *const BufferView) ?usize {
         const r = view.cursor.selection() orelse return null;
         if (r.len() != f.query.value().len) return null;
-        return search.ordinal(f.snapshot.items, f.query.value(), r.start, f.options);
+        const key = OrdinalKey{ .count = f.countKey(), .start = r.start };
+        if (f.ordinal_for == null or !std.meta.eql(f.ordinal_for.?, key)) {
+            f.ordinal = search.ordinal(f.snapshot.items, f.query.value(), r.start, f.options);
+            f.ordinal_for = key;
+        }
+        return f.ordinal;
     }
 
     /// Matches starting in `[start, end)`, from the synced snapshot.
     pub fn matchesIn(f: *const Self, start: usize, end: usize, out: *std.ArrayList(search.Match)) !void {
         out.clearRetainingCapacity();
+        const needle = f.query.value();
+        // Far enough past `end` for a match starting before it, and the
+        // byte after that a whole-word match is checked against.
+        const hay = f.snapshot.items[0..@min(end + needle.len + 1, f.snapshot.items.len)];
         var at = start;
-        while (search.next(f.snapshot.items, f.query.value(), at, f.options)) |m| {
+        while (search.next(hay, needle, at, f.options)) |m| {
             if (m.start >= end) break;
             try out.append(f.gpa, m);
             at = m.end;

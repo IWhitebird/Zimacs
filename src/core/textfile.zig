@@ -50,7 +50,7 @@ pub const Decoded = struct {
 
 pub fn decode(gpa: Allocator, bytes: []const u8) !Decoded {
     var encoding = detect(bytes);
-    const utf8 = toUtf8(gpa, bytes, encoding) catch |err| switch (err) {
+    const converted = toUtf8(gpa, bytes, encoding) catch |err| switch (err) {
         // Unpaired surrogates: keep the bytes rather than refuse the file.
         error.DanglingSurrogateHalf, error.ExpectedSecondSurrogateHalf, error.UnexpectedSecondSurrogateHalf => blk: {
             encoding = .windows1252;
@@ -58,7 +58,8 @@ pub fn decode(gpa: Allocator, bytes: []const u8) !Decoded {
         },
         else => return err,
     };
-    defer gpa.free(utf8);
+    defer if (converted) |c| gpa.free(c);
+    const utf8 = converted orelse if (encoding == .utf8_bom) bytes[bom_utf8.len..] else bytes;
     return .{
         .text = try toLf(gpa, utf8),
         .format = .{ .encoding = encoding, .line_ending = lineEndingOf(utf8) },
@@ -68,7 +69,9 @@ pub fn decode(gpa: Allocator, bytes: []const u8) !Decoded {
 /// Fails with `error.Unrepresentable` when the text holds characters the
 /// format's encoding cannot store.
 pub fn encode(gpa: Allocator, text: []const u8, format: Format) ![]u8 {
-    const lined = if (format.line_ending == .crlf) try toCrlf(gpa, text) else try gpa.dupe(u8, text);
+    if (format.line_ending == .lf) return fromUtf8(gpa, text, format.encoding);
+    const lined = try toCrlf(gpa, text);
+    if (format.encoding == .utf8) return lined;
     defer gpa.free(lined);
     return fromUtf8(gpa, lined, format.encoding);
 }
@@ -85,13 +88,17 @@ pub fn toLf(gpa: Allocator, bytes: []const u8) ![]u8 {
 }
 
 fn toCrlf(gpa: Allocator, text: []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(gpa);
+    const out = try gpa.alloc(u8, text.len + std.mem.count(u8, text, "\n"));
+    var at: usize = 0;
     for (text) |b| {
-        if (b == '\n') try out.append(gpa, '\r');
-        try out.append(gpa, b);
+        if (b == '\n') {
+            out[at] = '\r';
+            at += 1;
+        }
+        out[at] = b;
+        at += 1;
     }
-    return out.toOwnedSlice(gpa);
+    return out;
 }
 
 /// Whichever kind of line break the file uses most.
@@ -117,10 +124,10 @@ const bom_utf8 = [_]u8{ 0xEF, 0xBB, 0xBF };
 const bom_utf16le = [_]u8{ 0xFF, 0xFE };
 const bom_utf16be = [_]u8{ 0xFE, 0xFF };
 
-fn toUtf8(gpa: Allocator, bytes: []const u8, encoding: Encoding) ![]u8 {
+/// Text in another encoding as UTF-8; null when it is UTF-8 already.
+fn toUtf8(gpa: Allocator, bytes: []const u8, encoding: Encoding) !?[]u8 {
     return switch (encoding) {
-        .utf8 => gpa.dupe(u8, bytes),
-        .utf8_bom => gpa.dupe(u8, bytes[bom_utf8.len..]),
+        .utf8, .utf8_bom => null,
         .utf16le, .utf16be => blk: {
             const body = bytes[2..];
             const units = try gpa.alloc(u16, body.len / 2);
@@ -129,9 +136,9 @@ fn toUtf8(gpa: Allocator, bytes: []const u8, encoding: Encoding) ![]u8 {
                 const pair = body[i * 2 ..][0..2];
                 u.* = if (encoding == .utf16le) std.mem.readInt(u16, pair, .little) else std.mem.readInt(u16, pair, .big);
             }
-            break :blk std.unicode.utf16LeToUtf8Alloc(gpa, units);
+            break :blk try std.unicode.utf16LeToUtf8Alloc(gpa, units);
         },
-        .windows1252 => fromWindows1252(gpa, bytes),
+        .windows1252 => try fromWindows1252(gpa, bytes),
     };
 }
 

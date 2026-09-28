@@ -31,7 +31,6 @@ const Mark = struct {
 const Piece = struct {
     buf: u32 = 0,
     start: Mark = .{},
-    end: Mark = .{},
     len: u32 = 0,
     newlines: u32 = 0,
 };
@@ -57,6 +56,22 @@ const Buf = struct {
     fn deinit(b: *Buf, gpa: Allocator) void {
         b.bytes.deinit(gpa);
         b.starts.deinit(gpa);
+    }
+
+    /// Adds `text` to the end, noting where its lines start.
+    fn append(b: *Buf, gpa: Allocator, text: []const u8) !void {
+        const base: u32 = @intCast(b.bytes.items.len);
+        try b.bytes.appendSlice(gpa, text);
+        try b.noteLines(gpa, base);
+    }
+
+    /// Notes where lines start in the bytes from `base` on.
+    fn noteLines(b: *Buf, gpa: Allocator, base: u32) !void {
+        const text = b.bytes.items[base..];
+        var from: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, text, from, '\n')) |nl| : (from = nl + 1) {
+            try b.starts.append(gpa, base + @as(u32, @intCast(nl)) + 1);
+        }
     }
 
     fn lineAt(b: *const Buf, offset: u32) u32 {
@@ -103,28 +118,32 @@ pub const PieceTree = struct {
 
     /// Creates a document holding a copy of `bytes`.
     pub fn initFromBytes(gpa: Allocator, bytes: []const u8) !Self {
+        return initOwned(gpa, try gpa.dupe(u8, bytes));
+    }
+
+    /// Creates a document holding `bytes`, which it takes over, so a large
+    /// file is not copied once more. Frees them if it fails.
+    pub fn initOwned(gpa: Allocator, bytes: []u8) !Self {
+        var buf = Buf{ .bytes = .fromOwnedSlice(bytes) };
+        errdefer buf.deinit(gpa);
         var t = try Self.init(gpa);
         errdefer t.deinit();
-        if (bytes.len == 0) return t;
-
-        var buf = Buf{};
-        try buf.starts.append(gpa, 0);
-        try buf.bytes.appendSlice(gpa, bytes);
-        for (bytes, 0..) |b, i| {
-            if (b == '\n') try buf.starts.append(gpa, @intCast(i + 1));
+        if (bytes.len == 0) {
+            buf.deinit(gpa);
+            return t;
         }
+
+        try buf.starts.append(gpa, 0);
+        try buf.noteLines(gpa, 0);
+        const newlines: u32 = @intCast(buf.starts.items.len - 1);
 
         const index: u32 = @intCast(t.bufs.items.len);
         try t.bufs.append(gpa, buf);
-
-        const end: u32 = @intCast(bytes.len);
-        const added = &t.bufs.items[index];
         t.setRoot(try t.newNode(.{
             .buf = index,
             .start = .{},
-            .end = added.markAt(end),
-            .len = end,
-            .newlines = added.lineAt(end),
+            .len = @intCast(bytes.len),
+            .newlines = newlines,
         }));
         return t;
     }
@@ -307,14 +326,24 @@ pub const PieceTree = struct {
     pub fn insert(t: *Self, offset: u32, text: []const u8) !void {
         if (text.len == 0) return;
         const at_offset = @min(offset, t.total_len);
-        const piece = try t.addText(text);
-
         if (t.root == nil) {
-            t.setRoot(try t.newNode(piece));
+            t.setRoot(try t.newNode(try t.addText(text)));
             return;
         }
 
         const before = try t.split(at_offset);
+        // Typing straight on from the last insertion grows that piece,
+        // rather than adding a piece per keystroke.
+        if (before != nil and t.endsAdded(t.at(before).piece)) {
+            const grown = try t.addText(text);
+            t.at(before).piece.len += grown.len;
+            t.at(before).piece.newlines += grown.newlines;
+            t.total_len += grown.len;
+            t.total_newlines += grown.newlines;
+            t.bumpParents(before, grown.len, grown.newlines);
+            return;
+        }
+        const piece = try t.addText(text);
         if (before == nil) {
             _ = try t.insertLeft(t.first(t.root), piece);
         } else {
@@ -329,23 +358,17 @@ pub const PieceTree = struct {
         const end = @min(start + count, t.total_len);
         if (end <= start) return;
 
-        _ = try t.split(start);
+        const before = try t.split(start);
         _ = try t.split(end);
 
-        // Collect before removing: removal rebalances and would invalidate
-        // the walk.
-        var doomed: std.ArrayList(u32) = .empty;
-        defer doomed.deinit(t.gpa);
-
-        var walked: u32 = 0;
-        var node = t.first(t.root);
-        while (node != nil and walked < end) : (node = t.next(node)) {
-            const piece_len = t.at(node).piece.len;
-            if (walked >= start) try doomed.append(t.gpa, node);
-            walked += piece_len;
+        // The doomed pieces now follow `before` exactly. Removal relinks
+        // nodes but never moves a piece to another one, so `before` holds.
+        var left = end - start;
+        while (left > 0) {
+            const doomed = if (before == nil) t.first(t.root) else t.next(before);
+            left -= t.at(doomed).piece.len;
+            t.remove(doomed);
         }
-
-        for (doomed.items) |d| t.remove(d);
     }
 
     // --- buffers ---
@@ -357,18 +380,21 @@ pub const PieceTree = struct {
     fn addText(t: *Self, text: []const u8) !Piece {
         const buf = &t.bufs.items[0];
         const start: u32 = @intCast(buf.bytes.items.len);
-        try buf.bytes.appendSlice(t.gpa, text);
-        for (text, 0..) |b, i| {
-            if (b == '\n') try buf.starts.append(t.gpa, start + @as(u32, @intCast(i)) + 1);
-        }
-        const end: u32 = @intCast(buf.bytes.items.len);
+        const lines_before = buf.starts.items.len;
+        try buf.append(t.gpa, text);
         return .{
             .buf = 0,
             .start = buf.markAt(start),
-            .end = buf.markAt(end),
-            .len = end - start,
-            .newlines = buf.lineAt(end) - buf.lineAt(start),
+            .len = @intCast(text.len),
+            .newlines = @intCast(buf.starts.items.len - lines_before),
         };
+    }
+
+    /// Whether `piece` runs to the end of the added buffer, where new text
+    /// would carry straight on from it.
+    fn endsAdded(t: *const Self, piece: Piece) bool {
+        const added = &t.bufs.items[0];
+        return piece.buf == 0 and added.offsetOf(piece.start) + piece.len == added.bytes.items.len;
     }
 
     /// Newlines in the first `count` bytes of `piece`.
@@ -509,7 +535,6 @@ pub const PieceTree = struct {
         const tail = Piece{
             .buf = old.buf,
             .start = mid,
-            .end = old.end,
             .len = old.len - left,
             .newlines = old.newlines - head_newlines,
         };
@@ -517,7 +542,6 @@ pub const PieceTree = struct {
         t.at(node).piece = .{
             .buf = old.buf,
             .start = old.start,
-            .end = mid,
             .len = left,
             .newlines = head_newlines,
         };
@@ -1167,4 +1191,17 @@ test "reading chunk by chunk gives back the whole text" {
     }
     try testing.expectEqualStrings(">> hello, world", joined.items);
     try testing.expectEqualStrings("", tree.chunkAt(tree.len()));
+}
+
+test "typing on from an insertion grows its piece instead of adding more" {
+    const gpa = testing.allocator;
+    var tree = try PieceTree.initFromBytes(gpa, "ab");
+    defer tree.deinit();
+    const text = "hello, world";
+    for (text, 0..) |c, i| try tree.insert(1 + @as(u32, @intCast(i)), &.{c});
+    // The original split in two, plus the typed run.
+    try testing.expectEqual(@as(usize, 3), tree.nodes.items.len - 1 - tree.free.items.len);
+    const all = try tree.allocText(gpa);
+    defer gpa.free(all);
+    try testing.expectEqualStrings("ahello, worldb", all);
 }

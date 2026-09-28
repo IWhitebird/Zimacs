@@ -40,20 +40,31 @@ pub const Editor = struct {
     row_lines: std.ArrayList(?u32) = .empty,
     /// Search matches on screen this frame.
     matches: std.ArrayList(search.Match) = .empty,
-    /// Where the rows of the line being drawn start, while lines are folded.
+    /// Where the rows of the line being drawn start, while lines are folded:
+    /// as screen columns, and as byte offsets into the line.
     starts: std.ArrayList(u32) = .empty,
+    row_bytes: std.ArrayList(u32) = .empty,
     /// What each byte of the row being drawn is, for its colour.
     kinds: std.ArrayList(syntax.Kind) = .empty,
     /// The brackets marked around the caret, looked for again only when the
     /// caret or the text changes.
     bracket_pair: ?brackets.Pair = null,
-    bracket_key: ?BracketKey = null,
+    bracket_key: ?CaretKey = null,
+    /// The caret's screen column, kept the same way: finding it reads the
+    /// whole line, which may be megabytes long.
+    caret_column: u32 = 0,
+    caret_column_key: ?CaretKey = null,
     tabs: TabStrip = .{},
     tab_widths: std.ArrayList(f32) = .empty,
 
     const Self = @This();
 
-    const BracketKey = struct { view: u64, version: u64, caret: u32 };
+    /// What results worked out from the caret's place depend on.
+    const CaretKey = struct { view: u64, version: u64, caret: u32 };
+
+    fn caretKey(view: *const BufferView) CaretKey {
+        return .{ .view = view.id, .version = view.version, .caret = view.cursor.offset };
+    }
 
     const table = Artifact.Table{
         .init = &init,
@@ -77,6 +88,7 @@ pub const Editor = struct {
         e.row_lines.deinit(app.gpa);
         e.matches.deinit(app.gpa);
         e.starts.deinit(app.gpa);
+        e.row_bytes.deinit(app.gpa);
         e.kinds.deinit(app.gpa);
         e.tab_widths.deinit(app.gpa);
     }
@@ -142,7 +154,7 @@ pub const Editor = struct {
         view.followed = view.cursor.offset;
 
         const at = view.cursor.position(&view.tree);
-        const column = try e.columnOf(view, at.line, at.column);
+        const column = try e.caretColumn(view);
         const caret_row = if (app.config.wrap_lines) blk: {
             const fold = foldFor(l, cell);
             const placed = wrap.place(view.rows.breaksOf(&view.tree, fold, at.line), column);
@@ -194,10 +206,16 @@ pub const Editor = struct {
     }
 
     /// The screen column of a byte offset within a line.
-    fn columnOf(e: *Self, view: *BufferView, line: u32, byte: u32) !u32 {
-        e.raw.clearRetainingCapacity();
-        try view.tree.lineContent(line, &e.raw);
-        return text.columnOf(e.raw.items, byte, app.config.tab_width);
+    fn caretColumn(e: *Self, view: *BufferView) !u32 {
+        const key = caretKey(view);
+        if (e.caret_column_key == null or !std.meta.eql(e.caret_column_key.?, key)) {
+            const at = view.cursor.position(&view.tree);
+            e.raw.clearRetainingCapacity();
+            try view.tree.lineContent(at.line, &e.raw);
+            e.caret_column = text.columnOf(e.raw.items, at.column, app.config.tab_width);
+            e.caret_column_key = key;
+        }
+        return e.caret_column;
     }
 
     // ------------------------------------------------------------ drawing
@@ -235,10 +253,18 @@ pub const Editor = struct {
         while (row < rows and line < total) : (line += 1) {
             e.raw.clearRetainingCapacity();
             try view.tree.lineContent(line, &e.raw);
-            const columns = text.width(e.raw.items, tab);
+            // What the rows need of the line, in one pass over it rather
+            // than one per row: a line can be megabytes long.
+            var unfolded: text.Window = undefined;
+            const columns = if (wrapping) blk: {
+                try wrap.breaks(app.gpa, e.raw.items, fold, &e.starts);
+                break :blk try text.offsetsAt(app.gpa, e.raw.items, e.starts.items, tab, &e.row_bytes);
+            } else blk: {
+                unfolded = text.window(e.raw.items, view.left_column, view.left_column + visible + 1, tab);
+                break :blk unfolded.width;
+            };
             widest = @max(widest, columns);
 
-            if (wrapping) try wrap.breaks(app.gpa, e.raw.items, fold, &e.starts);
             const pieces: u32 = if (wrapping) @intCast(e.starts.items.len) else 1;
             var piece = skip;
             skip = 0;
@@ -275,9 +301,12 @@ pub const Editor = struct {
                 // Only the part of the line this row shows. Unfolded, that
                 // is the columns scrolled into view.
                 const origin = if (wrapping) from else view.left_column;
-                const first = text.characterAt(e.raw.items, origin, tab);
-                const last = text.offsetOf(e.raw.items, if (wrapping) to else @min(to, origin + visible + 1), tab);
-                try e.drawRowText(view, line, first.offset, last, first.column, origin, l.text.x + layout.padding, y, cell);
+                const first: u32, const first_column: u32, const last: u32 = if (wrapping) .{
+                    e.row_bytes.items[piece],
+                    from,
+                    if (piece + 1 < pieces) e.row_bytes.items[piece + 1] else @intCast(e.raw.items.len),
+                } else .{ unfolded.first, unfolded.first_column, unfolded.last };
+                try e.drawRowText(view, line, first, last, first_column, origin, l.text.x + layout.padding, y, cell);
             }
         }
         // Folded lines never scroll sideways.
@@ -330,7 +359,7 @@ pub const Editor = struct {
     }
 
     fn bracketsAround(e: *Self, view: *const BufferView) ?brackets.Pair {
-        const key = BracketKey{ .view = view.id, .version = view.version, .caret = view.cursor.offset };
+        const key = caretKey(view);
         if (e.bracket_key == null or !std.meta.eql(e.bracket_key.?, key)) {
             e.bracket_key = key;
             e.bracket_pair = brackets.match(&view.tree, key.caret);
@@ -399,7 +428,7 @@ pub const Editor = struct {
 
     fn drawCaret(e: *Self, view: *BufferView, l: Layout, cell: Metrics) !void {
         const at = view.cursor.position(&view.tree);
-        const column = try e.columnOf(view, at.line, at.column);
+        const column = try e.caretColumn(view);
 
         const placed = try e.screenRowOf(view, l, cell, at.line, column) orelse return;
         if (placed.row >= l.rows(cell)) return;
@@ -518,10 +547,9 @@ pub const Editor = struct {
         var label_buf: [96]u8 = undefined;
         // Reported as screen columns, so it agrees with where the caret is
         // drawn on a line holding tabs or multi-byte characters.
-        const where = view.cursor.position(&view.tree);
         const at = .{
-            .line = where.line + 1,
-            .column = (try e.columnOf(view, where.line, where.column)) + 1,
+            .line = view.cursor.position(&view.tree).line + 1,
+            .column = (try e.caretColumn(view)) + 1,
         };
         const label = if (view.cursor.selection()) |sel|
             std.fmt.bufPrintZ(&label_buf, "{d} selected    Ln {d}, Col {d}", .{ sel.len(), at.line, at.column }) catch return
