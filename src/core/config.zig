@@ -31,6 +31,7 @@ pub const Colors = struct {
     close_hover: u24 = 0xC42B1C,
     close_hover_text: u24 = 0xFFFFFF,
     find_match: u24 = 0x5C3F12,
+    bracket_match: u24 = 0x3B4252,
     warning: u24 = 0xE5A94B,
 
     /// Sets the field named `key`, if there is one.
@@ -51,6 +52,8 @@ pub const Config = struct {
     tab_width: u8 = 4,
     /// Insert spaces instead of a tab character.
     expand_tabs: bool = true,
+    /// In code, pair brackets and quotes as they are typed.
+    auto_close: bool = true,
     restore_session: bool = true,
     /// Fold long lines onto the next row instead of scrolling sideways.
     wrap_lines: bool = false,
@@ -101,6 +104,8 @@ pub const Config = struct {
             c.tab_width = try std.fmt.parseInt(u8, value, 10);
         } else if (eq(key, "expand_tabs")) {
             c.expand_tabs = try parseBool(value);
+        } else if (eq(key, "auto_close")) {
+            c.auto_close = try parseBool(value);
         } else if (eq(key, "restore_session")) {
             c.restore_session = try parseBool(value);
         } else if (eq(key, "wrap_lines")) {
@@ -188,6 +193,9 @@ const default_text = blk: {
         \\tab_width = {d}
         \\expand_tabs = {}
         \\
+        \\# In code, add the closing bracket or quote as the opening one is typed.
+        \\auto_close = {}
+        \\
         \\# Reopen the buffers you had last time, including unsaved ones.
         \\restore_session = {}
         \\
@@ -207,9 +215,9 @@ const default_text = blk: {
         \\
         \\
     , .{
-        d.font_size,       @tagName(d.caret_style), d.tab_width,   d.expand_tabs,
-        d.restore_session, d.wrap_lines,            d.show_hidden, d.custom_titlebar,
-        d.auto_update,
+        d.font_size,       @tagName(d.caret_style), d.tab_width,  d.expand_tabs,
+        d.auto_close,      d.restore_session,       d.wrap_lines, d.show_hidden,
+        d.custom_titlebar, d.auto_update,
     });
     for (@typeInfo(Colors).@"struct".fields) |field| {
         text = text ++ std.fmt.comptimePrint("{s} = #{x:0>6}\n", .{ field.name, @field(d.colors, field.name) });

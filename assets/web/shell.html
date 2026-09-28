@@ -26,7 +26,7 @@
   // the page claims them. These are the editor's. Copy, cut and paste stay
   // with the browser so the clipboard works, and so do the save, open and
   // reload keys, since the editor cannot save or open files here.
-  var editorKeys = /^(Key[ADFGHKLYZ]|Equal|Minus|Digit[0-9]|Enter)$/;
+  var editorKeys = /^(Key[ADFGHKLYZ]|Equal|Minus|Digit[0-9]|Enter|Slash)$/;
   window.addEventListener('keydown', function (e) {
     if (e.code === 'F3' || (e.ctrlKey && !e.altKey && editorKeys.test(e.code))) e.preventDefault();
   }, true);

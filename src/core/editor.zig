@@ -26,6 +26,7 @@ const BufferView = @import("buffer.zig").BufferView;
 const Metrics = @import("font.zig").Metrics;
 const Layout = layout.Layout;
 const Range = @import("cursor.zig").Range;
+const brackets = @import("brackets.zig");
 
 pub const Editor = struct {
     /// One line as stored, then the same line with tabs expanded.
@@ -38,10 +39,16 @@ pub const Editor = struct {
     row_lines: std.ArrayList(?u32) = .empty,
     /// Search matches on screen this frame.
     matches: std.ArrayList(search.Match) = .empty,
+    /// The brackets marked around the caret, looked for again only when the
+    /// caret or the text changes.
+    bracket_pair: ?brackets.Pair = null,
+    bracket_key: ?BracketKey = null,
     tabs: TabStrip = .{},
     tab_widths: std.ArrayList(f32) = .empty,
 
     const Self = @This();
+
+    const BracketKey = struct { view: *const BufferView, version: u64, caret: u32 };
 
     const table = Artifact.Table{
         .init = &init,
@@ -211,6 +218,7 @@ pub const Editor = struct {
 
         e.row_lines.clearRetainingCapacity();
         try e.collectMatches(view, rows);
+        const pair = if (selection == null) e.bracketsAround(view) else null;
 
         var widest: u32 = 1;
         var row: u32 = 0;
@@ -249,6 +257,10 @@ pub const Editor = struct {
                 if (selection) |range| {
                     e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.selection);
                 }
+                if (pair) |p| for ([_]u32{ p.open, p.close }) |at| {
+                    const range = Range{ .start = at, .end = at + 1 };
+                    e.drawSpan(view, l, cell, line, y, range, columns, from, to, theme.current.bracket_match);
+                };
                 if (e.raw.items.len == 0) continue;
 
                 // Only the slice of the line this row shows.
@@ -267,6 +279,15 @@ pub const Editor = struct {
         view.content_columns = widest;
 
         try e.drawCaret(view, l, cell);
+    }
+
+    fn bracketsAround(e: *Self, view: *const BufferView) ?brackets.Pair {
+        const key = BracketKey{ .view = view, .version = view.version, .caret = view.cursor.offset };
+        if (e.bracket_key == null or !std.meta.eql(e.bracket_key.?, key)) {
+            e.bracket_key = key;
+            e.bracket_pair = brackets.match(&view.tree, key.caret);
+        }
+        return e.bracket_pair;
     }
 
     fn collectMatches(e: *Self, view: *BufferView, rows: u32) !void {
@@ -455,10 +476,11 @@ pub const Editor = struct {
         else
             std.fmt.bufPrintZ(&label_buf, "Ln {d}, Col {d}", .{ at.line, at.column }) catch return;
 
-        // Right to left: position, file format, update state, then a notice.
-        var format_buf: [48]u8 = undefined;
-        const format = std.fmt.bufPrintZ(&format_buf, "{s}  {s}", .{
-            view.format.encoding.label(), view.format.line_ending.label(),
+        // Right to left: position, language and file format, update state,
+        // then a notice.
+        var format_buf: [64]u8 = undefined;
+        const format = std.fmt.bufPrintZ(&format_buf, "{s}  {s}  {s}", .{
+            view.language.name, view.format.encoding.label(), view.format.line_ending.label(),
         }) catch "";
         const t = theme.current;
         const segments = [_]?Segment{

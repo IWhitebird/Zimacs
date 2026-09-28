@@ -37,6 +37,7 @@ pub const Action = enum {
     open_line_above,
     indent,
     outdent,
+    toggle_comment,
     goto_line,
 
     toggle_wrap,
@@ -92,6 +93,7 @@ pub const bar = [_]Group{
         .{ .label = "Insert Line Above", .shortcut = "Ctrl+Shift+Enter", .action = .open_line_above },
         .{ .label = "Indent", .shortcut = "Tab", .action = .indent },
         .{ .label = "Outdent", .shortcut = "Shift+Tab", .action = .outdent },
+        .{ .label = "Toggle Comment", .shortcut = "Ctrl+/", .action = .toggle_comment },
     } },
     .{ .title = "View", .entries = &.{
         .{ .label = "Word Wrap", .shortcut = "Alt+Z", .action = .toggle_wrap, .checkable = true },

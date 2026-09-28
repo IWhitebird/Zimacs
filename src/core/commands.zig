@@ -23,6 +23,7 @@ const crash = @import("crash.zig");
 const report_mod = @import("report.zig");
 const system = @import("system.zig");
 const filedialog = @import("filedialog.zig");
+const comment = @import("comment.zig");
 const updatelog = @import("updatelog.zig");
 
 pub fn run(action: Action) !void {
@@ -55,6 +56,9 @@ pub fn run(action: Action) !void {
         },
         .delete_line => if (app.buffer.current()) |v| try v.deleteLine(),
         .duplicate_line => if (app.buffer.current()) |v| try v.duplicateLine(),
+        .toggle_comment => if (app.buffer.current()) |v| {
+            if (!try comment.toggle(v, v.language)) tell(.info, "{s} has no comments", .{v.language.name});
+        },
         .move_line_up => if (app.buffer.current()) |v| try v.moveLine(.up),
         .move_line_down => if (app.buffer.current()) |v| try v.moveLine(.down),
         .open_line_below => if (app.buffer.current()) |v| try v.openLineBelow(),

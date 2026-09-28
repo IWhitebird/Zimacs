@@ -18,6 +18,8 @@ const find_mod = @import("find.zig");
 const dialog_mod = @import("dialog.zig");
 const TextField = @import("field.zig").TextField;
 const BufferView = @import("buffer.zig").BufferView;
+const typing = @import("typing.zig");
+const language = @import("language.zig");
 const browser_mod = @import("browser.zig");
 
 /// Lines scrolled per wheel notch.
@@ -359,6 +361,17 @@ fn shortcutHeld() bool {
     return ctrlDown() or pen.isKeyDown(.left_alt);
 }
 
+/// The widest indentation unit `tab_width` can ask for.
+const max_indent_unit = 16;
+
+/// What one level of indentation is made of: a tab, or `tab_width` spaces.
+fn indentUnit(buf: *[max_indent_unit]u8) []const u8 {
+    if (!app.config.expand_tabs) return "\t";
+    const width = @min(app.config.tab_width, buf.len);
+    @memset(buf[0..width], ' ');
+    return buf[0..width];
+}
+
 /// One screen of lines, minus one so you keep your place while reading.
 fn pageRows() u32 {
     const rows = editor.currentLayout().rows(app.font.metrics);
@@ -400,6 +413,11 @@ fn typeText() !void {
     const view = app.buffer.current() orelse return;
     if (shortcutHeld()) return;
 
+    // Brackets and quotes pair up only in code, and only if wanted.
+    const lang = if (app.config.auto_close) view.language else &language.plain;
+    var unit_buf: [max_indent_unit]u8 = undefined;
+    const unit = indentUnit(&unit_buf);
+
     // The OS has already decoded these, so any keyboard layout, shift state
     // or dead key produces the right character without us mapping keys.
     while (true) {
@@ -407,26 +425,21 @@ fn typeText() !void {
         if (code <= 0 or code > 0x10FFFF) break;
         var utf8: [4]u8 = undefined;
         const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
-        try view.insert(utf8[0..n]);
+        try typing.typeText(view, utf8[0..n], lang);
     }
 
-    if (pressed(.enter) or pressed(.kp_enter)) try view.newline();
+    if (pressed(.enter) or pressed(.kp_enter)) try typing.newline(view, lang, unit);
     if (pressed(.tab)) {
         // With a selection, Tab shifts the whole block rather than replacing it.
         if (view.cursor.hasSelection()) {
             try commands.run(if (shiftDown()) .outdent else .indent);
         } else if (shiftDown()) {
             try commands.run(.outdent);
-        } else if (app.config.expand_tabs) {
-            var spaces: [16]u8 = undefined;
-            const width = @min(app.config.tab_width, spaces.len);
-            @memset(spaces[0..width], ' ');
-            try view.insert(spaces[0..width]);
         } else {
-            try view.insert("\t");
+            try view.insert(unit);
         }
     }
-    if (pressed(.backspace)) try view.backspace();
+    if (pressed(.backspace)) try typing.backspace(view, lang);
     if (pressed(.delete)) try view.deleteForward();
 }
 
@@ -487,6 +500,7 @@ fn editingShortcuts() !void {
     if (pressed(.z)) try commands.run(if (shift) .redo else .undo);
 
     if (pressed(.d)) try commands.run(.duplicate_line);
+    if (pressed(.slash)) try commands.run(.toggle_comment);
     if (shift and pressed(.k)) try commands.run(.delete_line);
     if (pressed(.enter) or pressed(.kp_enter)) {
         try commands.run(if (shift) .open_line_above else .open_line_below);

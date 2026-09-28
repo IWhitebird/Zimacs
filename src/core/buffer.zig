@@ -15,6 +15,8 @@ const PieceTree = @import("piecetree.zig").PieceTree;
 const Cursor = @import("cursor.zig").Cursor;
 const History = @import("history.zig").History;
 const text_mod = @import("text.zig");
+const language_mod = @import("language.zig");
+const Language = language_mod.Language;
 const textfile = @import("textfile.zig");
 pub const Format = textfile.Format;
 
@@ -54,6 +56,8 @@ pub const BufferView = struct {
     version: u64 = 0,
     /// How the file on disk is encoded, restored on save.
     format: Format = .{},
+    /// Told from the name, so it follows a Save As.
+    language: *const Language = &language_mod.plain,
     /// The file as last read or written, to notice changes made elsewhere.
     disk: ?Stamp = null,
 
@@ -247,7 +251,7 @@ pub const BufferView = struct {
     }
 
     /// The leading spaces and tabs of `line`, stopping at `before`.
-    fn appendIndent(v: *const Self, line: u32, before: u32, out: *std.ArrayList(u8)) !void {
+    pub fn appendIndent(v: *const Self, line: u32, before: u32, out: *std.ArrayList(u8)) !void {
         const start = v.tree.lineStart(line);
         const stop = @min(before, v.tree.lineEnd(line));
         if (stop <= start) return;
@@ -540,6 +544,7 @@ pub const Buffer = struct {
             .history = .{ .gpa = b.gpa },
             .path = path,
             .name = name,
+            .language = language_mod.detect(name),
         };
         try b.views.append(b.gpa, view);
         b.active = b.views.items.len - 1;
@@ -598,6 +603,7 @@ pub const Buffer = struct {
         b.gpa.free(view.name);
         view.path = owned_path;
         view.name = name;
+        view.language = language_mod.detect(name);
         return b.save(view);
     }
 };
