@@ -89,12 +89,7 @@ pub const Cursor = struct {
             return;
         };
         c.mark(extend);
-        if (c.offset > 0) {
-            c.offset -= 1;
-            // Step over the rest of a multi-byte character, so one press
-            // moves one character rather than one byte.
-            while (c.offset > 0 and isTrailing(tree.byteAt(c.offset) orelse 0)) c.offset -= 1;
-        }
+        c.offset = charBefore(tree, c.offset);
         c.resetGoal(tree);
     }
 
@@ -106,10 +101,7 @@ pub const Cursor = struct {
             return;
         };
         c.mark(extend);
-        if (c.offset < tree.len()) {
-            c.offset += 1;
-            while (c.offset < tree.len() and isTrailing(tree.byteAt(c.offset) orelse 0)) c.offset += 1;
-        }
+        c.offset = charAfter(tree, c.offset);
         c.resetGoal(tree);
     }
 
@@ -160,16 +152,13 @@ pub const Cursor = struct {
     /// Moves to the start of the previous word, the way Ctrl+Left does.
     pub fn wordLeft(c: *Self, tree: *const PieceTree, extend: bool) void {
         c.mark(extend);
-        while (c.offset > 0 and !isWord(tree.byteAt(c.offset - 1) orelse 0)) c.offset -= 1;
-        while (c.offset > 0 and isWord(tree.byteAt(c.offset - 1) orelse 0)) c.offset -= 1;
+        c.offset = wordBefore(tree, c.offset);
         c.resetGoal(tree);
     }
 
     pub fn wordRight(c: *Self, tree: *const PieceTree, extend: bool) void {
         c.mark(extend);
-        const total = tree.len();
-        while (c.offset < total and isWord(tree.byteAt(c.offset) orelse 0)) c.offset += 1;
-        while (c.offset < total and !isWord(tree.byteAt(c.offset) orelse 0)) c.offset += 1;
+        c.offset = wordAfter(tree, c.offset);
         c.resetGoal(tree);
     }
 
@@ -217,6 +206,40 @@ pub const Cursor = struct {
         c.offset = offset;
     }
 };
+
+/// Where the character before `offset` starts: one step back is one
+/// character, however many bytes it takes.
+pub fn charBefore(tree: *const PieceTree, offset: u32) u32 {
+    if (offset == 0) return 0;
+    var i = offset - 1;
+    while (i > 0 and isTrailing(tree.byteAt(i) orelse 0)) i -= 1;
+    return i;
+}
+
+/// Where the character at `offset` ends.
+pub fn charAfter(tree: *const PieceTree, offset: u32) u32 {
+    if (offset >= tree.len()) return tree.len();
+    var i = offset + 1;
+    while (i < tree.len() and isTrailing(tree.byteAt(i) orelse 0)) i += 1;
+    return i;
+}
+
+/// A word-wise step back from `offset`: over any spaces, then the word.
+pub fn wordBefore(tree: *const PieceTree, offset: u32) u32 {
+    var at = offset;
+    while (at > 0 and !isWord(tree.byteAt(at - 1) orelse 0)) at -= 1;
+    while (at > 0 and isWord(tree.byteAt(at - 1) orelse 0)) at -= 1;
+    return at;
+}
+
+/// A word-wise step forward from `offset`: over the word, then any spaces.
+pub fn wordAfter(tree: *const PieceTree, offset: u32) u32 {
+    const total = tree.len();
+    var at = offset;
+    while (at < total and isWord(tree.byteAt(at) orelse 0)) at += 1;
+    while (at < total and !isWord(tree.byteAt(at) orelse 0)) at += 1;
+    return at;
+}
 
 // ---------------------------------------------------------------- tests
 

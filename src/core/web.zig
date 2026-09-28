@@ -1,10 +1,11 @@
 //! Browser calls for the web build: fetching a file over HTTP, opening a
-//! link and writing to the console. They compile to nothing elsewhere.
+//! link, writing to the console and reading the canvas size. They compile
+//! to nothing elsewhere.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
-const on_web = builtin.os.tag == .emscripten;
+pub const on_web = builtin.os.tag == .emscripten;
 
 /// The bytes are freed when this returns; copy anything kept.
 pub const OnLoad = *const fn (bytes: []const u8) void;
@@ -42,7 +43,23 @@ pub fn consoleError(text: [*:0]const u8) void {
     if (on_web) emscripten_console_error(text);
 }
 
+/// The canvas's size on the page in device pixels, which the drawing buffer
+/// matches to stay sharp. Null off the web, or before the page lays it out.
+pub fn canvasPixels() ?struct { width: i32, height: i32 } {
+    if (!on_web) return null;
+    var css_width: f64 = 0;
+    var css_height: f64 = 0;
+    if (emscripten_get_element_css_size("#canvas", &css_width, &css_height) != 0) return null;
+    const ratio = emscripten_get_device_pixel_ratio();
+    const width: i32 = @intFromFloat(@round(css_width * ratio));
+    const height: i32 = @intFromFloat(@round(css_height * ratio));
+    if (width <= 0 or height <= 0) return null;
+    return .{ .width = width, .height = height };
+}
+
 extern fn emscripten_console_error(text: [*:0]const u8) void;
+extern fn emscripten_get_element_css_size(target: [*:0]const u8, width: *f64, height: *f64) c_int;
+extern fn emscripten_get_device_pixel_ratio() f64;
 extern fn emscripten_run_script(script: [*:0]const u8) void;
 extern fn emscripten_async_wget_data(
     url: [*:0]const u8,

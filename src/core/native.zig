@@ -27,9 +27,15 @@ pub fn setWindowSize(width: i32, height: i32) void {
     glfw.glfwSetWindowSize(glfw.glfwGetCurrentContext(), width, height);
 }
 
+/// Wakes the editor from waiting for events, from any thread.
+pub fn wake() void {
+    if (builtin.os.tag != .emscripten) glfw.glfwPostEmptyEvent();
+}
+
 const glfw = struct {
     extern fn glfwGetCurrentContext() ?*anyopaque;
     extern fn glfwSetWindowSize(window: ?*anyopaque, width: c_int, height: c_int) void;
+    extern fn glfwPostEmptyEvent() void;
 };
 
 /// Asks for rounded window corners. Only Windows 11 draws them for a
@@ -341,7 +347,7 @@ const x11 = struct {
 
         // Format-32 properties come back as C longs.
         const atoms: [*]const c_ulong = @ptrCast(@alignCast(bytes));
-        return std.mem.indexOfScalar(c_ulong, atoms[0..count], wanted) != null;
+        return std.mem.findScalar(c_ulong, atoms[0..count], wanted) != null;
     }
 };
 

@@ -69,7 +69,7 @@ const Buf = struct {
     fn noteLines(b: *Buf, gpa: Allocator, base: u32) !void {
         const text = b.bytes.items[base..];
         var from: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, text, from, '\n')) |nl| : (from = nl + 1) {
+        while (std.mem.findScalarPos(u8, text, from, '\n')) |nl| : (from = nl + 1) {
             try b.starts.append(gpa, base + @as(u32, @intCast(nl)) + 1);
         }
     }
@@ -211,26 +211,11 @@ pub const PieceTree = struct {
     /// Converts a byte offset to a line/column.
     pub fn positionAt(t: *const Self, offset: u32) Position {
         const target = @min(offset, t.total_len);
-        var node = t.root;
-        var left = target;
-        var newlines: u32 = 0;
-
-        while (node != nil) {
-            const n = t.at(node);
-            if (n.left_len > left) {
-                node = n.left;
-            } else if (n.left_len + n.piece.len > left) {
-                left -= n.left_len;
-                newlines += n.left_newlines;
-                const line = newlines + t.countNewlines(n.piece, left);
-                return .{ .line = line, .column = target - t.lineStart(line) };
-            } else {
-                left -= n.left_len + n.piece.len;
-                newlines += n.left_newlines + n.piece.newlines;
-                node = n.right;
-            }
-        }
-        return .{ .line = t.total_newlines, .column = target - t.lineStart(t.total_newlines) };
+        const line = if (t.locate(target)) |found|
+            found.newlines + t.countNewlines(t.at(found.node).piece, found.within)
+        else
+            t.total_newlines;
+        return .{ .line = line, .column = target - t.lineStart(line) };
     }
 
     /// Converts a line/column to a byte offset, clamping to the line's end.
@@ -244,21 +229,9 @@ pub const PieceTree = struct {
     pub fn copy(t: *const Self, offset: u32, count: u32, out: *std.ArrayList(u8)) !void {
         var left = @min(count, t.total_len -| offset);
         if (left == 0) return;
-
-        var node = t.root;
-        var skip = offset;
-        while (node != nil) {
-            const n = t.at(node);
-            if (n.left_len > skip) {
-                node = n.left;
-            } else if (n.left_len + n.piece.len > skip) {
-                skip -= n.left_len;
-                break;
-            } else {
-                skip -= n.left_len + n.piece.len;
-                node = n.right;
-            }
-        }
+        const found = t.locate(offset) orelse return;
+        var node = found.node;
+        var skip = found.within;
 
         while (node != nil and left > 0) {
             const piece = t.at(node).piece;
@@ -274,44 +247,41 @@ pub const PieceTree = struct {
 
     /// The byte at `offset`, or null past the end.
     pub fn byteAt(t: *const Self, offset: u32) ?u8 {
-        if (offset >= t.total_len) return null;
-        var node = t.root;
-        var left = offset;
-        while (node != nil) {
-            const n = t.at(node);
-            if (n.left_len > left) {
-                node = n.left;
-            } else if (n.left_len + n.piece.len > left) {
-                const buf = &t.bufs.items[n.piece.buf];
-                return buf.bytes.items[buf.offsetOf(n.piece.start) + left - n.left_len];
-            } else {
-                left -= n.left_len + n.piece.len;
-                node = n.right;
-            }
-        }
-        return null;
+        const found = t.locate(offset) orelse return null;
+        const piece = t.at(found.node).piece;
+        const buf = &t.bufs.items[piece.buf];
+        return buf.bytes.items[buf.offsetOf(piece.start) + found.within];
     }
 
     /// The text from `offset` to the end of the piece holding it: as much as
     /// can be read without copying. Empty past the end.
     pub fn chunkAt(t: *const Self, offset: u32) []const u8 {
-        if (offset >= t.total_len) return "";
+        const found = t.locate(offset) orelse return "";
+        const piece = t.at(found.node).piece;
+        const buf = &t.bufs.items[piece.buf];
+        const start = buf.offsetOf(piece.start);
+        return buf.bytes.items[start + found.within .. start + piece.len];
+    }
+
+    /// The piece holding `offset`, how far into it the offset is, and the
+    /// line breaks before that piece. Null at or past the end.
+    fn locate(t: *const Self, offset: u32) ?struct { node: u32, within: u32, newlines: u32 } {
         var node = t.root;
         var left = offset;
+        var newlines: u32 = 0;
         while (node != nil) {
             const n = t.at(node);
             if (n.left_len > left) {
                 node = n.left;
             } else if (n.left_len + n.piece.len > left) {
-                const buf = &t.bufs.items[n.piece.buf];
-                const start = buf.offsetOf(n.piece.start) + left - n.left_len;
-                return buf.bytes.items[start .. buf.offsetOf(n.piece.start) + n.piece.len];
+                return .{ .node = node, .within = left - n.left_len, .newlines = newlines + n.left_newlines };
             } else {
                 left -= n.left_len + n.piece.len;
+                newlines += n.left_newlines + n.piece.newlines;
                 node = n.right;
             }
         }
-        return "";
+        return null;
     }
 
     /// The whole document as a new slice. Caller frees it.
@@ -508,23 +478,9 @@ pub const PieceTree = struct {
     /// which keeps them short at the cost of a few extra nodes.
     fn split(t: *Self, offset: u32) !u32 {
         if (offset == 0) return nil;
-        if (offset >= t.total_len) return t.last(t.root);
-
-        var node = t.root;
-        var left = offset;
-        while (node != nil) {
-            const n = t.at(node);
-            if (n.left_len > left) {
-                node = n.left;
-            } else if (n.left_len + n.piece.len > left) {
-                left -= n.left_len;
-                break;
-            } else {
-                left -= n.left_len + n.piece.len;
-                node = n.right;
-            }
-        }
-        if (node == nil) return t.last(t.root);
+        const found = t.locate(offset) orelse return t.last(t.root);
+        const node = found.node;
+        const left = found.within;
         if (left == 0) return t.prev(node);
 
         const old = t.at(node).piece;

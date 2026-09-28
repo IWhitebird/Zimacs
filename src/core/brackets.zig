@@ -5,7 +5,7 @@ const PieceTree = @import("piecetree.zig").PieceTree;
 
 pub const Pair = struct { open: u32, close: u32 };
 
-const pairs = [_][2]u8{ .{ '(', ')' }, .{ '[', ']' }, .{ '{', '}' } };
+pub const pairs = [_][2]u8{ .{ '(', ')' }, .{ '[', ']' }, .{ '{', '}' } };
 
 /// How far to look for the partner before giving up, so a stray bracket
 /// in a large file cannot stall a frame.

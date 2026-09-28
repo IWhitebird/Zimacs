@@ -31,6 +31,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/report.zig", .raylib = false },
     .{ .path = "src/core/brackets.zig", .raylib = false },
     .{ .path = "src/core/regex.zig", .raylib = false },
+    .{ .path = "src/core/interval.zig", .raylib = false },
     .{ .path = "src/core/syntax.zig", .raylib = false },
     .{ .path = "src/core/comment.zig", .raylib = false },
     .{ .path = "src/core/typing.zig", .raylib = false },
@@ -163,10 +164,10 @@ const App = struct {
     }
 };
 
-/// A Tree-sitter grammar built in, by the name `language.zig` gives it.
+/// A Tree-sitter grammar built in, by the name `language.zig` gives it. Its
+/// package in build.zig.zon is `ts_` and the name.
 const Grammar = struct {
     name: []const u8,
-    package: []const u8,
     /// Whether it has a hand-written scanner beside its generated parser.
     scanner: bool,
     /// Also built into the web demo, which shows a C file.
@@ -179,19 +180,19 @@ const Grammar = struct {
 /// C++ and TypeScript are left out for now: their grammars are several
 /// megabytes each.
 const grammars = [_]Grammar{
-    .{ .name = "c", .package = "ts_c", .scanner = false, .web = true },
-    .{ .name = "zig", .package = "ts_zig", .scanner = false, .overrides = true },
-    .{ .name = "json", .package = "ts_json", .scanner = false },
-    .{ .name = "python", .package = "ts_python", .scanner = true },
-    .{ .name = "javascript", .package = "ts_javascript", .scanner = true },
-    .{ .name = "rust", .package = "ts_rust", .scanner = true },
-    .{ .name = "go", .package = "ts_go", .scanner = false },
-    .{ .name = "java", .package = "ts_java", .scanner = false },
-    .{ .name = "bash", .package = "ts_bash", .scanner = true },
-    .{ .name = "html", .package = "ts_html", .scanner = true },
-    .{ .name = "css", .package = "ts_css", .scanner = true },
-    .{ .name = "toml", .package = "ts_toml", .scanner = true, .overrides = true },
-    .{ .name = "yaml", .package = "ts_yaml", .scanner = true, .overrides = true },
+    .{ .name = "c", .scanner = false, .web = true },
+    .{ .name = "zig", .scanner = false, .overrides = true },
+    .{ .name = "json", .scanner = false },
+    .{ .name = "python", .scanner = true },
+    .{ .name = "javascript", .scanner = true },
+    .{ .name = "rust", .scanner = true },
+    .{ .name = "go", .scanner = false },
+    .{ .name = "java", .scanner = false },
+    .{ .name = "bash", .scanner = true },
+    .{ .name = "html", .scanner = true },
+    .{ .name = "css", .scanner = true },
+    .{ .name = "toml", .scanner = true, .overrides = true },
+    .{ .name = "yaml", .scanner = true, .overrides = true },
 };
 
 /// Tree-sitter and the grammars, compiled into `module`, with each
@@ -216,7 +217,7 @@ fn addSyntax(b: *std.Build, module: *std.Build.Module, web: bool) void {
     var overrides: std.ArrayList(bool) = .empty;
     for (grammars) |g| {
         if (web and !g.web) continue;
-        const dep = b.dependency(g.package, .{});
+        const dep = b.dependency(b.fmt("ts_{s}", .{g.name}), .{});
         module.addCSourceFile(.{ .file = dep.path("src/parser.c"), .flags = &c_flags });
         if (g.scanner) module.addCSourceFile(.{ .file = dep.path("src/scanner.c"), .flags = &c_flags });
         module.addAnonymousImport(b.fmt("highlights_{s}", .{g.name}), .{

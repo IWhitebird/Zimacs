@@ -3,7 +3,7 @@
 //! without `-Dself-update` only report that it exists.
 
 const std = @import("std");
-const builtin = @import("builtin");
+const web = @import("web.zig");
 const selfupdate = @import("selfupdate.zig");
 const https = @import("https.zig");
 const Log = @import("updatelog.zig").Log;
@@ -114,7 +114,7 @@ pub const Update = struct {
 
     /// No-op on the web, or while one is running or installed.
     pub fn start(u: *Self, gpa: std.mem.Allocator, io: std.Io, current: Version, options: Options) void {
-        if (builtin.os.tag == .emscripten) return;
+        if (web.on_web) return;
         switch (u.state.load(.acquire)) {
             .checking, .downloading, .installed => return,
             else => {},

@@ -46,20 +46,24 @@ pub fn decode(line: []const u8, i: usize) struct { code: u21, len: usize } {
     return .{ .code = code, .len = len };
 }
 
+/// The character of `line` at byte `i`, which starts at screen `column`:
+/// its length in bytes and the columns it takes, a tab running to the next
+/// stop.
+pub fn advance(line: []const u8, i: usize, column: u32, tab_width: u8) struct { len: usize, columns: u32 } {
+    if (line[i] == '\t') return .{ .len = 1, .columns = tabAdvance(column, tab_width) };
+    const ch = decode(line, i);
+    return .{ .len = ch.len, .columns = columnsFor(ch.code) };
+}
+
 /// The screen column that `byte_offset` within `line` falls on.
 pub fn columnOf(line: []const u8, byte_offset: usize, tab_width: u8) u32 {
     const stop = @min(byte_offset, line.len);
     var column: u32 = 0;
     var i: usize = 0;
     while (i < stop) {
-        if (line[i] == '\t') {
-            column += tabAdvance(column, tab_width);
-            i += 1;
-            continue;
-        }
-        const at = decode(line, i);
-        column += columnsFor(at.code);
-        i += at.len;
+        const ch = advance(line, i, column, tab_width);
+        column += ch.columns;
+        i += ch.len;
     }
     return column;
 }
@@ -70,13 +74,8 @@ pub fn offsetOf(line: []const u8, column: u32, tab_width: u8) u32 {
     var i: usize = 0;
     while (i < line.len) {
         if (at >= column) return @intCast(i);
-        if (line[i] == '\t') {
-            at += tabAdvance(at, tab_width);
-            i += 1;
-            continue;
-        }
-        const ch = decode(line, i);
-        at += columnsFor(ch.code);
+        const ch = advance(line, i, at, tab_width);
+        at += ch.columns;
         i += ch.len;
     }
     return @intCast(line.len);
@@ -88,10 +87,9 @@ pub fn characterAt(line: []const u8, column: u32, tab_width: u8) struct { offset
     var at: u32 = 0;
     var i: usize = 0;
     while (i < line.len) {
-        const ch = decode(line, i);
-        const advance = if (line[i] == '\t') tabAdvance(at, tab_width) else columnsFor(ch.code);
-        if (at + advance > column) break;
-        at += advance;
+        const ch = advance(line, i, at, tab_width);
+        if (at + ch.columns > column) break;
+        at += ch.columns;
         i += ch.len;
     }
     return .{ .offset = @intCast(i), .column = at };
@@ -109,9 +107,8 @@ pub fn window(line: []const u8, from: u32, to: u32, tab_width: u8) Window {
     var column: u32 = 0;
     var i: usize = 0;
     while (i < line.len) {
-        const ch = decode(line, i);
-        const advance = if (line[i] == '\t') tabAdvance(column, tab_width) else columnsFor(ch.code);
-        if (!first_found and column + advance > from) {
+        const ch = advance(line, i, column, tab_width);
+        if (!first_found and column + ch.columns > from) {
             out.first = @intCast(i);
             out.first_column = column;
             first_found = true;
@@ -120,7 +117,7 @@ pub fn window(line: []const u8, from: u32, to: u32, tab_width: u8) Window {
             out.last = @intCast(i);
             last_found = true;
         }
-        column += advance;
+        column += ch.columns;
         i += ch.len;
     }
     if (!first_found) out.first_column = column;
@@ -136,8 +133,8 @@ pub fn offsetsAt(gpa: std.mem.Allocator, line: []const u8, columns: []const u32,
     var i: usize = 0;
     while (i < line.len) {
         while (out.items.len < columns.len and columns[out.items.len] <= column) try out.append(gpa, @intCast(i));
-        const ch = decode(line, i);
-        column += if (line[i] == '\t') tabAdvance(column, tab_width) else columnsFor(ch.code);
+        const ch = advance(line, i, column, tab_width);
+        column += ch.columns;
         i += ch.len;
     }
     while (out.items.len < columns.len) try out.append(gpa, @intCast(line.len));
@@ -162,30 +159,18 @@ pub fn fitStart(buf: []u8, line: []const u8, columns: u32) [:0]const u8 {
     return std.fmt.bufPrintZ(buf, "{s}{s}", .{ prefix, line[from..] }) catch "";
 }
 
-/// Writes `line` with tabs turned into spaces, so what is drawn lines up with
-/// the columns everything else computes.
-pub fn expand(line: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator, tab_width: u8) !void {
-    _ = try expandFrom(line, 0, out, gpa, tab_width);
-}
-
-/// `expand` for part of a line that starts at screen column `start_column`,
-/// so its tabs still reach the same stops as in the whole line. Returns the
-/// column it ends at.
+/// Writes part of a line, which starts at screen column `start_column`, with
+/// tabs turned into spaces reaching the same stops as in the whole line, so
+/// what is drawn lines up with the columns everything else computes.
+/// Returns the column it ends at.
 pub fn expandFrom(line: []const u8, start_column: u32, out: *std.ArrayList(u8), gpa: std.mem.Allocator, tab_width: u8) !u32 {
     var column = start_column;
     var i: usize = 0;
     while (i < line.len) {
-        if (line[i] == '\t') {
-            const spaces = tabAdvance(column, tab_width);
-            try out.appendNTimes(gpa, ' ', spaces);
-            column += spaces;
-            i += 1;
-            continue;
-        }
-        const at = decode(line, i);
-        try out.appendSlice(gpa, line[i .. i + at.len]);
-        column += columnsFor(at.code);
-        i += at.len;
+        const ch = advance(line, i, column, tab_width);
+        if (line[i] == '\t') try out.appendNTimes(gpa, ' ', ch.columns) else try out.appendSlice(gpa, line[i .. i + ch.len]);
+        column += ch.columns;
+        i += ch.len;
     }
     return column;
 }
@@ -320,15 +305,15 @@ test "expand turns tabs into spaces" {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
 
-    try expand("a\tb", &out, gpa, 4);
+    _ = try expandFrom("a\tb", 0, &out, gpa, 4);
     try testing.expectEqualSlices(u8, "a   b", out.items);
 
     out.clearRetainingCapacity();
-    try expand("\tx", &out, gpa, 4);
+    _ = try expandFrom("\tx", 0, &out, gpa, 4);
     try testing.expectEqualSlices(u8, "    x", out.items);
 
     out.clearRetainingCapacity();
-    try expand("no tabs", &out, gpa, 4);
+    _ = try expandFrom("no tabs", 0, &out, gpa, 4);
     try testing.expectEqualSlices(u8, "no tabs", out.items);
 }
 

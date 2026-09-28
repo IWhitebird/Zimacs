@@ -78,6 +78,12 @@ pub const Layout = struct {
         return if (n <= 0) 0 else @intFromFloat(n);
     }
 
+    /// Columns of text that fit across the text area.
+    pub fn columns(l: Layout, cell: Metrics) u32 {
+        const n = @floor((l.text.width - padding * 2) / cell.width);
+        return if (n <= 0) 0 else @intFromFloat(n);
+    }
+
     /// Which screen row and column the given point falls on, counted from the
     /// top of the text area. Turning that into a document position is the
     /// caller's job, since it depends on whether lines are folded.
@@ -177,6 +183,16 @@ pub fn promptRowHeight(cell: Metrics) f32 {
 }
 
 /// Where suggestion `row` of the prompt sits.
+/// Which of the `shown` suggestion rows `point` is on.
+pub fn promptRowAt(l: Layout, cell: Metrics, shown: usize, point: pen.Vector2) ?usize {
+    const panel = promptPanel(l, cell, shown);
+    var row: usize = 0;
+    while (row < shown) : (row += 1) {
+        if (pen.checkCollisionPointRec(point, promptRow(panel, cell, row))) return row;
+    }
+    return null;
+}
+
 pub fn promptRow(panel: pen.Rectangle, cell: Metrics, row: usize) pen.Rectangle {
     const height = promptRowHeight(cell);
     return .{

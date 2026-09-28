@@ -4,17 +4,18 @@
 //! undo history, and which line sits at the top of the screen. Opening a path
 //! that is already open just switches to it.
 //!
-//! Every change to the text goes through `BufferView.edit`, the only place
-//! that touches the tree, moves the caret and records undo - so those three
-//! can never fall out of step.
+//! Every change to the text goes through `BufferView.replace`, the only place
+//! that touches the tree, which tells everything worked out from the text
+//! about it. `edit` puts undo and the caret on top, and undo and redo call
+//! `replace` directly, so none of them can fall out of step.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Artifact = @import("artifact.zig").Artifact;
 const PieceTree = @import("piecetree.zig").PieceTree;
-const Cursor = @import("cursor.zig").Cursor;
+const cursor_mod = @import("cursor.zig");
+const Cursor = cursor_mod.Cursor;
 const History = @import("history.zig").History;
-const text_mod = @import("text.zig");
 const language_mod = @import("language.zig");
 const wrap = @import("wrap.zig");
 const syntax_mod = @import("syntax.zig");
@@ -121,14 +122,14 @@ pub const BufferView = struct {
     pub fn backspace(v: *Self) !void {
         if (v.cursor.selection()) |r| return v.edit(r.start, r.len(), "");
         if (v.cursor.offset == 0) return;
-        const start = v.charStartBefore(v.cursor.offset);
+        const start = cursor_mod.charBefore(&v.tree, v.cursor.offset);
         try v.edit(start, v.cursor.offset - start, "");
     }
 
     pub fn deleteForward(v: *Self) !void {
         if (v.cursor.selection()) |r| return v.edit(r.start, r.len(), "");
         if (v.cursor.offset >= v.tree.len()) return;
-        try v.edit(v.cursor.offset, v.charEndAfter(v.cursor.offset) - v.cursor.offset, "");
+        try v.edit(v.cursor.offset, cursor_mod.charAfter(&v.tree, v.cursor.offset) - v.cursor.offset, "");
     }
 
     /// Deletes the word before the caret, the way Ctrl+Backspace does: any
@@ -136,24 +137,14 @@ pub const BufferView = struct {
     pub fn deleteWordBefore(v: *Self) !void {
         if (v.cursor.selection()) |r| return v.edit(r.start, r.len(), "");
         if (v.cursor.offset == 0) return;
-
-        var at = v.cursor.offset;
-        while (at > 0 and !text_mod.isWord(v.tree.byteAt(at - 1) orelse 0)) at -= 1;
-        while (at > 0 and text_mod.isWord(v.tree.byteAt(at - 1) orelse 0)) at -= 1;
-        // A run of spaces alone still deletes something.
-        if (at == v.cursor.offset) at -= 1;
+        const at = cursor_mod.wordBefore(&v.tree, v.cursor.offset);
         try v.edit(at, v.cursor.offset - at, "");
     }
 
     pub fn deleteWordAfter(v: *Self) !void {
         if (v.cursor.selection()) |r| return v.edit(r.start, r.len(), "");
-        const total = v.tree.len();
-        if (v.cursor.offset >= total) return;
-
-        var at = v.cursor.offset;
-        while (at < total and text_mod.isWord(v.tree.byteAt(at) orelse 0)) at += 1;
-        while (at < total and !text_mod.isWord(v.tree.byteAt(at) orelse 0)) at += 1;
-        if (at == v.cursor.offset) at += 1;
+        if (v.cursor.offset >= v.tree.len()) return;
+        const at = cursor_mod.wordAfter(&v.tree, v.cursor.offset);
         try v.edit(v.cursor.offset, at - v.cursor.offset, "");
     }
 
@@ -212,7 +203,7 @@ pub const BufferView = struct {
         try swapped.appendSlice(v.gpa, trimNewline(lower.items));
         try swapped.append(v.gpa, '\n');
         try swapped.appendSlice(v.gpa, trimNewline(upper.items));
-        if (end == v.tree.len() and !endsWithNewline(lower.items)) {
+        if (end == v.tree.len() and !std.mem.endsWith(u8, lower.items, "\n")) {
             // Nothing: the block did not end in a newline, so neither does it now.
         } else {
             try swapped.append(v.gpa, '\n');
@@ -402,19 +393,6 @@ pub const BufferView = struct {
         if (v.syntax) |s| s.destroy();
         v.syntax = if (v.tree.len() <= syntax_mod.max_bytes) Syntax.create(v.gpa, v.language) else null;
     }
-
-    /// Steps back over a whole character, so multi-byte text is not split.
-    fn charStartBefore(v: *const Self, offset: u32) u32 {
-        var i = offset - 1;
-        while (i > 0 and text_mod.isTrailing(v.tree.byteAt(i) orelse 0)) i -= 1;
-        return i;
-    }
-
-    fn charEndAfter(v: *const Self, offset: u32) u32 {
-        var i = offset + 1;
-        while (i < v.tree.len() and text_mod.isTrailing(v.tree.byteAt(i) orelse 0)) i += 1;
-        return i;
-    }
 };
 
 pub const Buffer = struct {
@@ -543,7 +521,7 @@ pub const Buffer = struct {
         const old = try view.tree.allocText(b.gpa);
         defer b.gpa.free(old);
         const new = decoded.text;
-        const head = std.mem.indexOfDiff(u8, old, new) orelse old.len;
+        const head = std.mem.findDiff(u8, old, new) orelse old.len;
         if (head < old.len or head < new.len) {
             var tail: usize = 0;
             while (tail < old.len - head and tail < new.len - head and old[old.len - 1 - tail] == new[new.len - 1 - tail]) tail += 1;
@@ -688,11 +666,7 @@ fn absolute(io: std.Io, gpa: Allocator, path: []const u8) ![]u8 {
 }
 
 fn trimNewline(line: []const u8) []const u8 {
-    return if (endsWithNewline(line)) line[0 .. line.len - 1] else line;
-}
-
-fn endsWithNewline(line: []const u8) bool {
-    return line.len > 0 and line[line.len - 1] == '\n';
+    return if (std.mem.endsWith(u8, line, "\n")) line[0 .. line.len - 1] else line;
 }
 
 /// A file's size and modification time, enough to tell it was changed.
@@ -709,17 +683,6 @@ pub fn stampOf(io: std.Io, path: []const u8) ?Stamp {
 }
 
 /// Checks the disk every so often rather than every frame.
-pub const DiskWatch = struct {
-    interval: f64 = 2,
-    last_check: f64 = 0,
-
-    pub fn due(w: *DiskWatch, now: f64) bool {
-        if (now - w.last_check < w.interval) return false;
-        w.last_check = now;
-        return true;
-    }
-};
-
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;

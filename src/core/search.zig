@@ -107,8 +107,8 @@ pub fn replaceAll(
 }
 
 fn rawIndex(hay: []const u8, needle: []const u8, from: usize, o: Options) ?usize {
-    if (o.match_case) return std.mem.indexOfPos(u8, hay, from, needle);
-    return std.ascii.indexOfIgnoreCasePos(hay, from, needle);
+    if (o.match_case) return std.mem.findPos(u8, hay, from, needle);
+    return std.ascii.findIgnoreCasePos(hay, from, needle);
 }
 
 fn isWholeWord(hay: []const u8, start: usize, len: usize) bool {

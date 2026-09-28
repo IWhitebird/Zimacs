@@ -51,7 +51,7 @@ fn appendEncoded(gpa: std.mem.Allocator, out: *std.ArrayList(u8), byte: u8) !voi
 /// The start of `text`, cut at a line.
 fn head(text: []const u8, max: usize) []const u8 {
     if (text.len <= max) return std.mem.trimEnd(u8, text, "\n");
-    const cut = std.mem.lastIndexOfScalar(u8, text[0..max], '\n') orelse max;
+    const cut = std.mem.findScalarLast(u8, text[0..max], '\n') orelse max;
     return text[0..cut];
 }
 
@@ -73,7 +73,7 @@ fn tailLines(text: []const u8, count: usize) []const u8 {
 const testing = std.testing;
 
 fn decoded(gpa: std.mem.Allocator, url: []const u8) ![]u8 {
-    const query = url[std.mem.indexOf(u8, url, "?body=").? + "?body=".len ..];
+    const query = url[std.mem.find(u8, url, "?body=").? + "?body=".len ..];
     const copy = try gpa.dupe(u8, query);
     defer gpa.free(copy);
     return gpa.dupe(u8, std.Uri.percentDecodeInPlace(copy));
@@ -92,9 +92,9 @@ test "the issue carries the version, the crash and the latest update lines" {
 
     const body = try decoded(testing.allocator, url);
     defer testing.allocator.free(body);
-    try testing.expect(std.mem.indexOf(u8, body, "0.1.10 on x86_64-linux") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "panic: boom\nframe one\n```") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "one\ntwo\nthree\n```") != null);
+    try testing.expect(std.mem.find(u8, body, "0.1.10 on x86_64-linux") != null);
+    try testing.expect(std.mem.find(u8, body, "panic: boom\nframe one\n```") != null);
+    try testing.expect(std.mem.find(u8, body, "one\ntwo\nthree\n```") != null);
 }
 
 test "a long crash and log are cut to keep the link a usable length" {
@@ -111,6 +111,6 @@ test "no crash and no log still gives a form to fill in" {
     defer testing.allocator.free(url);
     const body = try decoded(testing.allocator, url);
     defer testing.allocator.free(body);
-    try testing.expect(std.mem.indexOf(u8, body, "What happened?") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "Last crash") == null);
+    try testing.expect(std.mem.find(u8, body, "What happened?") != null);
+    try testing.expect(std.mem.find(u8, body, "Last crash") == null);
 }

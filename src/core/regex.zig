@@ -50,7 +50,7 @@ fn matchHere(pattern: []const u8, subject: []const u8, at: usize) bool {
 
 /// `(a|b|c)` followed by the rest of the pattern.
 fn matchGroup(pattern: []const u8, subject: []const u8, at: usize) bool {
-    const close = std.mem.indexOfScalar(u8, pattern, ')') orelse return false;
+    const close = std.mem.findScalar(u8, pattern, ')') orelse return false;
     const rest = pattern[close + 1 ..];
     var options = std.mem.splitScalar(u8, pattern[1..close], '|');
     while (options.next()) |option| {
@@ -66,7 +66,7 @@ fn matchGroup(pattern: []const u8, subject: []const u8, at: usize) bool {
 fn atomLen(pattern: []const u8) ?usize {
     return switch (pattern[0]) {
         '\\' => if (pattern.len >= 2) 2 else null,
-        '[' => if (std.mem.indexOfScalarPos(u8, pattern, 2, ']')) |end| end + 1 else null,
+        '[' => if (std.mem.findScalarPos(u8, pattern, 2, ']')) |end| end + 1 else null,
         '*', '+', '?', ')', '|' => null,
         else => 1,
     };

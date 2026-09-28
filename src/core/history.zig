@@ -10,6 +10,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// The most one typed character takes in UTF-8; only edits that small join
+/// the one before, so a paste stays an undo step of its own.
+const max_char_bytes = 4;
+
 pub const Edit = struct {
     /// Never reused, so a state of the text can be told apart from every
     /// other even after undo or trimming.
@@ -59,11 +63,11 @@ pub const History = struct {
         h.edits.deinit(h.gpa);
     }
 
-    pub fn canUndo(h: Self) bool {
+    fn canUndo(h: Self) bool {
         return h.applied > 0;
     }
 
-    pub fn canRedo(h: Self) bool {
+    fn canRedo(h: Self) bool {
         return h.applied < h.edits.items.len;
     }
 
@@ -102,7 +106,7 @@ pub const History = struct {
         fresh.id = h.freshId();
         try h.edits.append(h.gpa, fresh);
         h.applied = h.edits.items.len;
-        try h.trim();
+        h.trim();
     }
 
     /// Returns the edit to reverse, or null. The caller applies it backwards:
@@ -152,8 +156,8 @@ pub const History = struct {
         // Typing straight on from where the last text was inserted.
         if (last.isInsert() and edit.isInsert() and
             edit.offset == last.offset + last.inserted.len and
-            edit.inserted.len <= 4 and
-            !endsLine(last.inserted) and !endsLine(edit.inserted))
+            edit.inserted.len <= max_char_bytes and
+            !std.mem.endsWith(u8, last.inserted, "\n") and !std.mem.endsWith(u8, edit.inserted, "\n"))
         {
             const joined = try std.mem.concat(h.gpa, u8, &.{ last.inserted, edit.inserted });
             h.gpa.free(last.inserted);
@@ -166,7 +170,7 @@ pub const History = struct {
         // Backspacing straight back from where the last delete ended.
         if (last.isDelete() and edit.isDelete() and
             edit.offset + edit.removed.len == last.offset and
-            edit.removed.len <= 4)
+            edit.removed.len <= max_char_bytes)
         {
             const joined = try std.mem.concat(h.gpa, u8, &.{ edit.removed, last.removed });
             h.gpa.free(last.removed);
@@ -180,7 +184,7 @@ pub const History = struct {
         return false;
     }
 
-    fn trim(h: *Self) !void {
+    fn trim(h: *Self) void {
         if (h.edits.items.len <= h.limit) return;
         const excess = h.edits.items.len - h.limit;
         h.base = h.edits.items[excess - 1].id;
@@ -190,10 +194,6 @@ pub const History = struct {
         h.applied -= @min(h.applied, excess);
     }
 };
-
-fn endsLine(text: []const u8) bool {
-    return text.len > 0 and text[text.len - 1] == '\n';
-}
 
 // ---------------------------------------------------------------- tests
 

@@ -134,7 +134,7 @@ pub const Editor = struct {
     pub fn scrollSideways(e: *Self, columns: i32) void {
         _ = e;
         const view = app.buffer.current() orelse return;
-        const visible = visibleColumns(currentLayout(), app.font.metrics);
+        const visible = currentLayout().columns(app.font.metrics);
         const max = view.content_columns -| visible;
         const next = @as(i64, view.left_column) + columns;
         view.left_column = if (next <= 0) 0 else @min(@as(u32, @intCast(next)), max);
@@ -173,7 +173,7 @@ pub const Editor = struct {
             return;
         }
 
-        const visible = visibleColumns(l, cell);
+        const visible = l.columns(cell);
         if (column < view.left_column) {
             view.left_column = column;
         } else if (visible > 0 and column >= view.left_column + visible) {
@@ -242,8 +242,8 @@ pub const Editor = struct {
         try e.collectMatches(view, rows);
         const pair = if (selection == null) e.bracketsAround(view) else null;
         // Another slice of parsing, if the tree is behind the text.
-        if (view.syntax) |s| _ = s.step(&view.tree);
-        const visible = visibleColumns(l, cell);
+        if (view.syntax) |s| s.step(&view.tree);
+        const visible = l.columns(cell);
 
         var widest: u32 = 1;
         var row: u32 = 0;
@@ -488,7 +488,7 @@ pub const Editor = struct {
         }
 
         const track = layout.horizontalTrack(l);
-        const visible = visibleColumns(l, cell);
+        const visible = l.columns(cell);
         if (layout.horizontalThumb(track, view.left_column, visible, view.content_columns)) |bar| {
             pen.drawRectangleRounded(bar, 0.6, 4, if (pen.checkCollisionPointRec(pointer, track))
                 theme.current.scrollbar_hover
@@ -1095,18 +1095,6 @@ fn aboutUpdateLine() [:0]const u8 {
     };
 }
 
-/// Which suggestion row is under `point`, if the prompt is open.
-pub fn promptRowAt(point: pen.Vector2, l: Layout, cell: Metrics) ?usize {
-    if (!app.prompt.active) return null;
-    const shown = app.prompt.shown();
-    const panel = layout.promptPanel(l, cell, shown);
-    var row: usize = 0;
-    while (row < shown) : (row += 1) {
-        if (pen.checkCollisionPointRec(point, layout.promptRow(panel, cell, row))) return row;
-    }
-    return null;
-}
-
 /// The layout for this frame, sized to the buffer that is showing.
 pub fn currentLayout() Layout {
     const lines = if (app.buffer.current()) |v| v.tree.lineCount() else 1;
@@ -1114,26 +1102,15 @@ pub fn currentLayout() Layout {
 }
 
 fn syntaxColour(kind: syntax.Kind) pen.Color {
-    const t = theme.current;
     return switch (kind) {
-        .none => t.text,
-        .keyword => t.syntax_keyword,
-        .string => t.syntax_string,
-        .escape => t.syntax_escape,
-        .comment => t.syntax_comment,
-        .number => t.syntax_number,
-        .constant => t.syntax_constant,
-        .function => t.syntax_function,
-        .type => t.syntax_type,
-        .property => t.syntax_property,
-        .tag => t.syntax_tag,
-        .builtin => t.syntax_builtin,
+        .none => theme.current.text,
+        inline else => |k| @field(theme.current, "syntax_" ++ @tagName(k)),
     };
 }
 
 /// How lines fold in this layout.
 pub fn foldFor(l: Layout, cell: Metrics) wrap.Fold {
-    return .{ .width = visibleColumns(l, cell), .tab = app.config.tab_width };
+    return .{ .width = l.columns(cell), .tab = app.config.tab_width };
 }
 
 /// Where the view is scrolled to and how far it can go, in rows: document
@@ -1158,12 +1135,6 @@ pub fn scrollToRow(view: *BufferView, l: Layout, cell: Metrics, row: u32) void {
     const at = view.rows.lineAt(&view.tree, foldFor(l, cell), top);
     view.top_line = at.line;
     view.top_row = at.row;
-}
-
-/// How many whole columns of text fit across the text area.
-pub fn visibleColumns(l: Layout, cell: Metrics) u32 {
-    const n = @floor((l.text.width - layout.padding * 2) / cell.width);
-    return if (n <= 0) 0 else @intFromFloat(n);
 }
 
 /// Where tab `index` sits, or null when it is scrolled wholly out of the strip.

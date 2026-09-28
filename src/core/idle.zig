@@ -5,10 +5,9 @@
 const std = @import("std");
 const pen = @import("raylib");
 const app = @import("../zimacs.zig");
+const native = @import("native.zig");
 
 const heartbeat_ms = 500;
-
-extern fn glfwPostEmptyEvent() void;
 
 var stopped = std.atomic.Value(bool).init(false);
 
@@ -59,6 +58,6 @@ fn hadInput() bool {
 fn beat(io: std.Io) void {
     while (!stopped.load(.acquire)) {
         io.sleep(.fromMilliseconds(heartbeat_ms), .awake) catch return;
-        if (!stopped.load(.acquire)) glfwPostEmptyEvent();
+        if (!stopped.load(.acquire)) native.wake();
     }
 }

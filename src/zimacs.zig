@@ -23,23 +23,23 @@ const theme = @import("core/theme.zig");
 const update_mod = @import("core/update.zig");
 const web = @import("core/web.zig");
 const window_mod = @import("core/window.zig");
-const DiskWatch = @import("core/buffer.zig").DiskWatch;
+const Interval = @import("core/interval.zig").Interval;
 
-pub const Artifact = @import("core/artifact.zig").Artifact;
-pub const Buffer = @import("core/buffer.zig").Buffer;
-pub const Editor = @import("core/editor.zig").Editor;
-pub const Font = @import("core/font.zig").Font;
-pub const Input = @import("core/input.zig").Input;
-pub const Menu = @import("core/menu.zig").Menu;
-pub const Prompt = @import("core/prompt.zig").Prompt;
-pub const Recent = recent_mod.Recent;
-pub const Browser = @import("core/browser.zig").Browser;
-pub const Update = update_mod.Update;
-pub const Window = @import("core/window.zig").Window;
-pub const Find = @import("core/find.zig").Find;
-pub const Dialog = @import("core/dialog.zig").Dialog;
-pub const Notice = @import("core/notice.zig").Notice;
-pub const FileDialog = @import("core/filedialog.zig").Dialog;
+const Artifact = @import("core/artifact.zig").Artifact;
+const Buffer = @import("core/buffer.zig").Buffer;
+const Editor = @import("core/editor.zig").Editor;
+const Font = @import("core/font.zig").Font;
+const Input = @import("core/input.zig").Input;
+const Menu = @import("core/menu.zig").Menu;
+const Prompt = @import("core/prompt.zig").Prompt;
+const Recent = recent_mod.Recent;
+const Browser = @import("core/browser.zig").Browser;
+const Update = update_mod.Update;
+const Window = @import("core/window.zig").Window;
+const Find = @import("core/find.zig").Find;
+const Dialog = @import("core/dialog.zig").Dialog;
+const Notice = @import("core/notice.zig").Notice;
+const FileDialog = @import("core/filedialog.zig").Dialog;
 
 const leak_checks = builtin.mode == .Debug;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -64,7 +64,7 @@ const sqlite_url = "https://cdn.jsdelivr.net/gh/gittiver/sqlite3-amalgamation@ma
 const welcome_data = @embedFile("welcome_data");
 
 /// True for the web build, which has no filesystem and no child processes.
-pub const on_web = builtin.os.tag == .emscripten;
+pub const on_web = web.on_web;
 
 /// Zig 0.16 does all file access through an `Io`. Null where there is none.
 pub var io: ?std.Io = null;
@@ -121,8 +121,10 @@ pub fn run(start: Start) !void {
     const config_failure = loadConfig(start);
     theme.apply(config.colors);
 
+    data_dir = if (start.env) |env| try paths.dataDir(gpa, env) else null;
+    defer if (data_dir) |d| gpa.free(d);
     // Before the window opens, so it opens at the saved size and zoom.
-    const session_dir = try sessionDir(start);
+    const session_dir = if (data_dir) |d| try std.fs.path.join(gpa, &.{ d, session.dir_name }) else null;
     defer if (session_dir) |d| gpa.free(d);
     const last = lastExtras(session_dir);
     font.base = config.font_size;
@@ -155,15 +157,15 @@ pub fn run(start: Start) !void {
     try font.load();
     defer font.unload();
 
-    data_dir = try dataDir(start);
-    defer if (data_dir) |d| gpa.free(d);
-    if (data_dir) |d| if (io) |active_io| recent.load(active_io, d) catch {};
-    if (data_dir) |d| update.log.setDir(d);
     var crashed_last_time = false;
-    if (data_dir) |d| if (io) |active_io| {
-        crash.setUp(active_io, d, version);
-        crashed_last_time = crash.takeNew(active_io, d);
-    };
+    if (data_dir) |d| {
+        update.log.setDir(d);
+        if (io) |active_io| {
+            recent.load(active_io, d) catch {};
+            crash.setUp(active_io, d, version);
+            crashed_last_time = crash.takeNew(active_io, d);
+        }
+    }
 
     try openStartingBuffers(start, session_dir);
     if (config_failure) |err| commands.report("Could not read " ++ config_mod.file_name, err);
@@ -206,7 +208,8 @@ pub fn run(start: Start) !void {
 }
 
 var autosave = session.Autosave{};
-var disk_watch = DiskWatch{};
+/// How often files are checked for changes made by other programs.
+var disk_watch = Interval{ .seconds = 2 };
 var update_schedule = update_mod.Schedule{};
 
 fn lastExtras(session_dir: ?[]const u8) session.Extras {
@@ -312,15 +315,4 @@ fn loadConfig(start: Start) ?anyerror {
     defer gpa.free(text);
     config.applyText(text);
     return null;
-}
-
-fn sessionDir(start: Start) !?[]u8 {
-    const base = try dataDir(start) orelse return null;
-    defer gpa.free(base);
-    return try std.fs.path.join(gpa, &.{ base, session.dir_name });
-}
-
-fn dataDir(start: Start) !?[]u8 {
-    const env = start.env orelse return null;
-    return paths.dataDir(gpa, env);
 }

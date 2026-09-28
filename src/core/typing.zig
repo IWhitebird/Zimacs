@@ -8,7 +8,7 @@ const BufferView = @import("buffer.zig").BufferView;
 const Language = @import("language.zig").Language;
 const text = @import("text.zig");
 
-const brackets = [_][2]u8{ .{ '(', ')' }, .{ '[', ']' }, .{ '{', '}' } };
+const pairs = @import("brackets.zig").pairs;
 
 pub fn typeText(view: *BufferView, typed: []const u8, lang: *const Language) !void {
     if (!lang.code or typed.len != 1) return view.insert(typed);
@@ -81,18 +81,18 @@ pub fn newline(view: *BufferView, lang: *const Language, indent_unit: []const u8
 }
 
 fn closerOf(opener: u8, lang: *const Language) ?u8 {
-    for (brackets) |pair| if (pair[0] == opener) return pair[1];
-    if (std.mem.indexOfScalar(u8, lang.quotes, opener) != null) return opener;
+    for (pairs) |pair| if (pair[0] == opener) return pair[1];
+    if (std.mem.findScalar(u8, lang.quotes, opener) != null) return opener;
     return null;
 }
 
 fn isCloser(c: u8, lang: *const Language) bool {
-    for (brackets) |pair| if (pair[1] == c) return true;
-    return std.mem.indexOfScalar(u8, lang.quotes, c) != null;
+    for (pairs) |pair| if (pair[1] == c) return true;
+    return std.mem.findScalar(u8, lang.quotes, c) != null;
 }
 
 fn isBracketPair(open: u8, close: ?u8) bool {
-    for (brackets) |pair| if (pair[0] == open and pair[1] == close) return true;
+    for (pairs) |pair| if (pair[0] == open and pair[1] == close) return true;
     return false;
 }
 

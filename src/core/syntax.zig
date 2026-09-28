@@ -5,7 +5,7 @@
 //! grammar's highlight query.
 
 const std = @import("std");
-const builtin = @import("builtin");
+const web = @import("web.zig");
 const ts = @import("treesitter.zig");
 const regex = @import("regex.zig");
 const PieceTree = @import("piecetree.zig").PieceTree;
@@ -83,7 +83,7 @@ const Predicate = struct {
 
 /// Compiled queries last as long as the program, so they share one arena.
 /// The web build's allocator is libc's, since emscripten owns its heap.
-var compiled_arena = std.heap.ArenaAllocator.init(if (builtin.os.tag == .emscripten) std.heap.c_allocator else std.heap.page_allocator);
+var compiled_arena = std.heap.ArenaAllocator.init(if (web.on_web) std.heap.c_allocator else std.heap.page_allocator);
 
 fn grammarIndex(lang: *const Language) ?usize {
     const wanted = lang.grammar orelse return null;
@@ -146,21 +146,21 @@ pub const Syntax = struct {
         s.stale = true;
     }
 
-    /// Parses up to a slice of the text. True while there is more to do.
-    pub fn step(s: *Syntax, text: *const PieceTree) bool {
-        if (!s.stale) return false;
+    /// Parses up to a slice of the text; `stale` stays set while there is
+    /// more to do.
+    pub fn step(s: *Syntax, text: *const PieceTree) void {
+        if (!s.stale) return;
         var progress = Progress{};
         const input = ts.Input{ .payload = @ptrCast(@constCast(text)), .read = read };
         const options = ts.ParseOptions{ .payload = &progress, .progress_callback = Progress.check };
         const parsed = ts.ts_parser_parse_with_options(s.parser, s.tree, input, options) orelse {
             s.resuming = true;
-            return true;
+            return;
         };
         if (s.tree) |old| ts.ts_tree_delete(old);
         s.tree = parsed;
         s.stale = false;
         s.resuming = false;
-        return false;
     }
 
     /// The coloured spans between two byte offsets, in document order: a
@@ -407,19 +407,19 @@ test "a C file is coloured, and an edit is picked up by the next parse" {
     defer text.deinit();
     const s = Syntax.create(testing.allocator, language.detect("x.c")).?;
     defer s.destroy();
-    while (s.step(&text)) {}
+    while (s.stale) s.step(&text);
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(testing.allocator);
     const spans = s.highlights(&text, 0, text.len());
     try spanText(src, spans, .keyword, &out);
-    try testing.expect(std.mem.indexOf(u8, out.items, "return|") != null);
+    try testing.expect(std.mem.find(u8, out.items, "return|") != null);
     out.clearRetainingCapacity();
     try spanText(src, spans, .comment, &out);
     try testing.expectEqualStrings("// done|", out.items);
 
     // Turn the number into a string literal.
-    const at: u32 = @intCast(std.mem.indexOf(u8, src, "42").?);
+    const at: u32 = @intCast(std.mem.find(u8, src, "42").?);
     try text.delete(at, 2);
     try text.insert(at, "\"s\"");
     s.edited(.{
@@ -430,7 +430,7 @@ test "a C file is coloured, and an edit is picked up by the next parse" {
         .old_end_point = .{ .row = 1, .column = 13 },
         .new_end_point = .{ .row = 1, .column = 14 },
     });
-    while (s.step(&text)) {}
+    while (s.stale) s.step(&text);
     const now = try text.allocText(testing.allocator);
     defer testing.allocator.free(now);
     out.clearRetainingCapacity();
@@ -449,8 +449,8 @@ test "a large file parses a slice at a time" {
     defer text.deinit();
     const s = Syntax.create(testing.allocator, language.detect("x.c")).?;
     defer s.destroy();
-    var steps: usize = 1;
-    while (s.step(&text)) steps += 1;
+    var steps: usize = 0;
+    while (s.stale) : (steps += 1) s.step(&text);
     try testing.expect(steps >= 3);
     try testing.expect(s.tree != null);
 }
@@ -461,7 +461,7 @@ test "languages without a built-in grammar get no highlighter" {
 }
 
 fn kindAt(s: *Syntax, text: *const PieceTree, src: []const u8, word: []const u8) ?Kind {
-    const at: u32 = @intCast(std.mem.indexOf(u8, src, word).?);
+    const at: u32 = @intCast(std.mem.find(u8, src, word).?);
     var found: ?Kind = null;
     for (s.highlights(text, 0, text.len())) |sp| {
         if (sp.start <= at and at + word.len <= sp.end) found = sp.kind;
@@ -475,7 +475,7 @@ test "a query written for Neovim lets the later, more specific pattern win" {
     defer text.deinit();
     const s = Syntax.create(testing.allocator, language.detect("x.zig")).?;
     defer s.destroy();
-    while (s.step(&text)) {}
+    while (s.stale) s.step(&text);
     try testing.expectEqual(Kind.function, kindAt(s, &text, src, "print").?);
 }
 
@@ -485,7 +485,7 @@ test "a YAML key is not coloured as the string it is written as" {
     defer text.deinit();
     const s = Syntax.create(testing.allocator, language.detect("x.yml")).?;
     defer s.destroy();
-    while (s.step(&text)) {}
+    while (s.stale) s.step(&text);
     try testing.expect(kindAt(s, &text, src, "name").? != .string);
 }
 
@@ -495,7 +495,7 @@ test "spans that start together come outermost first" {
     defer text.deinit();
     const s = Syntax.create(testing.allocator, language.detect("x.c")).?;
     defer s.destroy();
-    while (s.step(&text)) {}
+    while (s.stale) s.step(&text);
     const spans = s.highlights(&text, 0, text.len());
     for (spans[1..], spans[0 .. spans.len - 1]) |b, a| {
         try testing.expect(a.start < b.start or (a.start == b.start and a.end >= b.end));

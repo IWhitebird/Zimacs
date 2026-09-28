@@ -51,7 +51,7 @@ pub const Log = struct {
 fn keptPart(old: []const u8) []const u8 {
     if (old.len < max_bytes) return old;
     const half = old[old.len - max_bytes / 2 ..];
-    const line = std.mem.indexOfScalar(u8, half, '\n') orelse return "";
+    const line = std.mem.findScalar(u8, half, '\n') orelse return "";
     return half[line + 1 ..];
 }
 

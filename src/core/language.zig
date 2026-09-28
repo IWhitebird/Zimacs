@@ -74,14 +74,17 @@ pub const all = [_]Language{
 };
 
 /// The language of a file called `name`, which may be a whole path.
+/// The longest extension any language lists.
+const max_extension = 16;
+
 pub fn detect(name: []const u8) *const Language {
     const base = std.fs.path.basename(name);
     for (&all) |*lang| {
         for (lang.file_names) |file| if (std.mem.eql(u8, base, file)) return lang;
     }
-    const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return &plain;
+    const dot = std.mem.findScalarLast(u8, base, '.') orelse return &plain;
     const ext = base[dot + 1 ..];
-    var lower: [16]u8 = undefined;
+    var lower: [max_extension]u8 = undefined;
     if (ext.len == 0 or ext.len > lower.len) return &plain;
     const wanted = std.ascii.lowerString(&lower, ext);
     for (&all) |*lang| {
@@ -110,6 +113,6 @@ test "every extension is lowercase, short enough to match, and one language's" {
             try testing.expect(!std.mem.eql(u8, ext, other));
         };
         for (ext) |ch| try testing.expect(!std.ascii.isUpper(ch));
-        try testing.expect(ext.len <= 16);
+        try testing.expect(ext.len <= max_extension);
     };
 }

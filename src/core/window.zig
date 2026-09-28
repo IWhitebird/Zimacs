@@ -7,6 +7,7 @@ const pen = @import("raylib");
 const app = @import("../zimacs.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const native = @import("native.zig");
+const web = @import("web.zig");
 const commands = @import("commands.zig");
 const Placement = @import("session.zig").Placement;
 const Edges = @import("titlebar.zig").Edges;
@@ -21,14 +22,14 @@ const min_height = 240;
 const reachable_width = 120;
 const reachable_height = 24;
 
-extern fn emscripten_get_element_css_size(target: [*:0]const u8, width: *f64, height: *f64) c_int;
-extern fn emscripten_get_device_pixel_ratio() f64;
+const title = "Zimacs";
+/// Frames drawn while something is moving; idle waits for events instead.
+const target_fps = 165;
 
 pub const Window = struct {
-    title: [:0]const u8 = "Zimacs",
+    /// The size to open at.
     width: i32 = 800,
     height: i32 = 450,
-    target_fps: i32 = 165,
     /// The system frame is off and Zimacs draws the title bar.
     custom_frame: bool = false,
     close_requested: bool = false,
@@ -66,10 +67,10 @@ pub const Window = struct {
             .window_hidden = hidden,
         });
         if (builtin.mode != .Debug) pen.setTraceLogLevel(.warning);
-        pen.initWindow(w.width, w.height, w.title);
+        pen.initWindow(w.width, w.height, title);
         // raylib only logs a failure here and carries on without a window.
         if (!pen.isWindowReady()) return error.NoDisplay;
-        pen.setTargetFPS(w.target_fps);
+        pen.setTargetFPS(target_fps);
         // raylib closes on Escape by default.
         pen.setExitKey(.null);
         setIcon();
@@ -89,10 +90,6 @@ pub const Window = struct {
 
     pub fn render(ctx: *anyopaque) !void {
         const w: *Self = @ptrCast(@alignCast(ctx));
-        if (pen.isWindowResized()) {
-            w.width = pen.getRenderWidth();
-            w.height = pen.getRenderHeight();
-        }
         w.trackNormal();
         openDroppedFiles();
     }
@@ -283,19 +280,9 @@ fn round(v: f32) i32 {
 /// browser does not upscale it. Must run before `beginDrawing`, since a
 /// resize clears the framebuffer.
 pub fn fitToCanvas() void {
-    if (!app.on_web) return;
-
-    var css_width: f64 = 0;
-    var css_height: f64 = 0;
-    if (emscripten_get_element_css_size("#canvas", &css_width, &css_height) != 0) return;
-
-    const ratio = emscripten_get_device_pixel_ratio();
-    const want_width: i32 = @intFromFloat(@round(css_width * ratio));
-    const want_height: i32 = @intFromFloat(@round(css_height * ratio));
-    if (want_width <= 0 or want_height <= 0) return;
-
-    if (want_width != pen.getRenderWidth() or want_height != pen.getRenderHeight()) {
-        pen.setWindowSize(want_width, want_height);
+    const want = web.canvasPixels() orelse return;
+    if (want.width != pen.getRenderWidth() or want.height != pen.getRenderHeight()) {
+        pen.setWindowSize(want.width, want.height);
     }
 }
 

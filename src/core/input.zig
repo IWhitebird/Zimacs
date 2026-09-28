@@ -243,13 +243,9 @@ const FindBar = struct {
         const alt = altDown();
         const before = std.hash.Wyhash.hash(0, f.query.value());
 
-        while (true) {
-            const code = pen.getCharPressed();
-            if (code <= 0 or code > 0x10FFFF) break;
-            if (shortcutHeld()) continue;
-            var utf8: [4]u8 = undefined;
-            const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
-            try field.insert(gpa, utf8[0..n]);
+        var utf8: [4]u8 = undefined;
+        while (nextTyped(&utf8)) |typed| {
+            if (!shortcutHeld()) try field.insert(gpa, typed);
         }
 
         if (pressed(.backspace)) if (ctrl) field.deleteWordBefore() else field.backspace();
@@ -337,6 +333,20 @@ fn handleMenu() !bool {
     if (clicked) app.menu.close();
     return true;
 }
+
+/// The next character typed this frame, as UTF-8 in `buf`. The system has
+/// already decoded it, so any keyboard layout, shift state or dead key
+/// comes out right without mapping keys here.
+fn nextTyped(buf: *[4]u8) ?[]const u8 {
+    while (true) {
+        const code = pen.getCharPressed();
+        if (code <= 0 or code > max_codepoint) return null;
+        const n = std.unicode.utf8Encode(@intCast(code), buf) catch continue;
+        return buf[0..n];
+    }
+}
+
+const max_codepoint = 0x10FFFF;
 
 /// True on the first press, then on auto-repeat.
 ///
@@ -461,15 +471,8 @@ fn typeText() !void {
     var unit_buf: [config_mod.max_indent_unit]u8 = undefined;
     const unit = app.config.indentUnit(&unit_buf);
 
-    // The OS has already decoded these, so any keyboard layout, shift state
-    // or dead key produces the right character without us mapping keys.
-    while (true) {
-        const code = pen.getCharPressed();
-        if (code <= 0 or code > 0x10FFFF) break;
-        var utf8: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
-        try typing.typeText(view, utf8[0..n], lang);
-    }
+    var utf8: [4]u8 = undefined;
+    while (nextTyped(&utf8)) |typed| try typing.typeText(view, typed, lang);
 
     if (pressed(.enter) or pressed(.kp_enter)) try typing.newline(view, lang, unit);
     if (pressed(.tab)) {
@@ -655,7 +658,7 @@ fn onScrollbar(point: pen.Vector2, l: layout_mod.Layout, which: Bar) bool {
         },
         .horizontal => blk: {
             const track = layout_mod.horizontalTrack(l);
-            const visible = editor.visibleColumns(l, cell);
+            const visible = l.columns(cell);
             break :blk pen.checkCollisionPointRec(point, track) and
                 layout_mod.horizontalThumb(track, view.left_column, visible, view.content_columns) != null;
         },
@@ -763,7 +766,7 @@ fn scrollTo(point: pen.Vector2, l: layout_mod.Layout) void {
 fn scrollSidewaysTo(point: pen.Vector2, l: layout_mod.Layout) void {
     const view = app.buffer.current() orelse return;
     const track = layout_mod.horizontalTrack(l);
-    const visible = editor.visibleColumns(l, app.font.metrics);
+    const visible = l.columns(app.font.metrics);
     const bar = layout_mod.horizontalThumb(track, view.left_column, visible, view.content_columns) orelse return;
     view.left_column = layout_mod.columnAtTrack(
         track,
@@ -789,13 +792,9 @@ fn scroll() void {
 // -------------------------------------------------------------- prompt
 
 fn runPrompt() !void {
-    while (true) {
-        const code = pen.getCharPressed();
-        if (code <= 0 or code > 0x10FFFF) break;
-        if (shortcutHeld()) continue;
-        var utf8: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(@intCast(code), &utf8) catch continue;
-        try app.prompt.append(utf8[0..n]);
+    var utf8: [4]u8 = undefined;
+    while (nextTyped(&utf8)) |typed| {
+        if (!shortcutHeld()) try app.prompt.append(typed);
     }
 
     if (pressed(.up)) app.prompt.cycle(-1);
@@ -812,7 +811,7 @@ fn runPrompt() !void {
     // Clicking a suggestion picks it.
     if (pen.isMouseButtonPressed(.left)) {
         const l = editor.currentLayout();
-        if (editor.promptRowAt(pen.getMousePosition(), l, app.font.metrics)) |row| {
+        if (layout_mod.promptRowAt(l, app.font.metrics, app.prompt.shown(), pen.getMousePosition())) |row| {
             app.prompt.pick(row);
             try commitPrompt();
             return;

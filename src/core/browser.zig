@@ -20,15 +20,12 @@ pub const Browser = struct {
     dir: []const u8 = "",
     /// Entry names, directories suffixed with '/'. Owned.
     names: std.ArrayList([]const u8) = .empty,
-    /// Borrowed views of `names`, which the prompt shows and filters.
-    listing: std.ArrayList([]const u8) = .empty,
 
     const Self = @This();
 
     pub fn deinit(b: *Self) void {
         b.clear();
         b.names.deinit(b.gpa);
-        b.listing.deinit(b.gpa);
         if (b.dir.len > 0) b.gpa.free(b.dir);
         b.dir = "";
     }
@@ -36,7 +33,6 @@ pub const Browser = struct {
     fn clear(b: *Self) void {
         for (b.names.items) |n| b.gpa.free(n);
         b.names.clearRetainingCapacity();
-        b.listing.clearRetainingCapacity();
     }
 
     /// Reads `path` and replaces the listing with its contents.
@@ -73,16 +69,13 @@ pub const Browser = struct {
         // `..` stays pinned at the top; everything else sorts.
         std.mem.sort([]const u8, b.names.items[1..], {}, before);
 
-        try b.listing.ensureTotalCapacity(b.gpa, b.names.items.len);
-        for (b.names.items) |n| b.listing.appendAssumeCapacity(n);
-
         const owned = try b.gpa.dupe(u8, absolute);
         if (b.dir.len > 0) b.gpa.free(b.dir);
         b.dir = owned;
     }
 
     pub fn items(b: Self) []const []const u8 {
-        return b.listing.items;
+        return b.names.items;
     }
 
     /// The full path `name` refers to. Caller frees.
@@ -98,7 +91,7 @@ pub fn isDirectory(name: []const u8) bool {
     return name.len > 0 and name[name.len - 1] == '/';
 }
 
-pub fn trimSlash(name: []const u8) []const u8 {
+fn trimSlash(name: []const u8) []const u8 {
     return if (isDirectory(name)) name[0 .. name.len - 1] else name;
 }
 

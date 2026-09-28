@@ -1,7 +1,6 @@
-//! The one-line prompt along the bottom, used to type a file path.
-//!
-//! raylib has no native file dialog, so opening and saving-as ask here
-//! instead - the same idea as an Emacs minibuffer.
+//! The one-line prompt, for typing a path, a line number, or a name in the
+//! built-in file browser, which stands in when the system has no file
+//! dialog - the same idea as an Emacs minibuffer.
 
 const std = @import("std");
 const text_mod = @import("text.zig");
@@ -11,13 +10,7 @@ pub const Kind = enum { open, save_as, browse, save_into, goto_line };
 
 /// Case-insensitive substring test, for narrowing the suggestion list.
 fn contains(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len == 0) return true;
-    if (needle.len > haystack.len) return false;
-    var i: usize = 0;
-    while (i + needle.len <= haystack.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
-    }
-    return false;
+    return std.ascii.findIgnoreCase(haystack, needle) != null;
 }
 
 pub const Prompt = struct {
@@ -64,7 +57,7 @@ pub const Prompt = struct {
     }
 
     /// Narrows the list to whatever contains the typed text, case-insensitively.
-    pub fn refilter(p: *Self) !void {
+    fn refilter(p: *Self) !void {
         p.matches.clearRetainingCapacity();
         for (p.options, 0..) |option, i| {
             if (contains(option, p.input.items)) try p.matches.append(p.gpa, i);
@@ -103,7 +96,7 @@ pub const Prompt = struct {
     }
 
     /// The suggestion currently highlighted, if any.
-    pub fn choice(p: Self) ?[]const u8 {
+    fn choice(p: Self) ?[]const u8 {
         const row = p.highlighted() orelse return null;
         return p.options[p.matches.items[row]];
     }
@@ -114,7 +107,7 @@ pub const Prompt = struct {
     /// The result borrows the prompt's own storage, so it stops being valid
     /// the moment the prompt is closed or typed into. Use `takeResult` unless
     /// you are finished with it before then.
-    pub fn result(p: Self) []const u8 {
+    fn result(p: Self) []const u8 {
         return p.choice() orelse p.input.items;
     }
 

@@ -28,16 +28,12 @@ pub fn breaks(gpa: std.mem.Allocator, line: []const u8, fold: Fold, out: *std.Ar
     var i: usize = 0;
     while (i < line.len) {
         const is_space = line[i] == ' ' or line[i] == '\t';
-        const width: u32, const len: usize = if (line[i] == '\t')
-            .{ text.tabAdvance(column, fold.tab), 1 }
-        else blk: {
-            const at = text.decode(line, i);
-            break :blk .{ text.columnsFor(at.code), at.len };
-        };
+        const ch = text.advance(line, i, column, fold.tab);
+        const width = ch.columns;
 
         // Spaces may hang past the edge; the word after them moves down.
         if (!is_space and column + width > row_start + fold.width and column > row_start) {
-            const start = if (after_space) |a| if (a > row_start) a else column else column;
+            const start = after_space orelse column;
             try out.append(gpa, start);
             row_start = start;
             after_space = null;
@@ -48,7 +44,7 @@ pub fn breaks(gpa: std.mem.Allocator, line: []const u8, fold: Fold, out: *std.Ar
             }
         }
         column += width;
-        i += len;
+        i += ch.len;
         if (is_space) after_space = column;
     }
 }
@@ -148,7 +144,7 @@ pub const Rows = struct {
         if (tree.lineLen(line) <= fold.width) {
             r.line_buf.clearRetainingCapacity();
             tree.lineContent(line, &r.line_buf) catch return 1;
-            if (std.mem.indexOfScalar(u8, r.line_buf.items, '\t') == null) return 1;
+            if (std.mem.findScalar(u8, r.line_buf.items, '\t') == null) return 1;
         }
         return @intCast(r.breaksOf(tree, fold, line).len);
     }

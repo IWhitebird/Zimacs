@@ -107,7 +107,7 @@ pub const Config = struct {
             const line = trim(raw);
             if (line.len == 0 or line[0] == '#') continue;
 
-            const split = std.mem.indexOfScalar(u8, line, '=') orelse {
+            const split = std.mem.findScalar(u8, line, '=') orelse {
                 c.note(number, "expected key = value");
                 continue;
             };
@@ -196,7 +196,7 @@ pub fn withSetting(gpa: std.mem.Allocator, text: []const u8, key: []const u8, va
 fn isSettingFor(line: []const u8, key: []const u8) bool {
     const trimmed = trim(line);
     if (trimmed.len == 0 or trimmed[0] == '#') return false;
-    const split = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
+    const split = std.mem.findScalar(u8, trimmed, '=') orelse return false;
     return eq(trim(trimmed[0..split]), key);
 }
 

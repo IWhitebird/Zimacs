@@ -1,7 +1,7 @@
 //! Converts between a file's bytes and the editor's text. The buffer always
 //! holds UTF-8 with LF line breaks; the file's encoding, byte order mark and
-//! line endings are remembered and put back on save, so an unedited file
-//! saves byte for byte as it was read.
+//! line endings are remembered and put back on save. A file mixing LF and
+//! CRLF comes back with the kind it used most throughout.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

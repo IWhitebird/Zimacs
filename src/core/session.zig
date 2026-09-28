@@ -14,6 +14,7 @@ const BufferView = buffer_mod.BufferView;
 const Format = buffer_mod.Format;
 const Stamp = buffer_mod.Stamp;
 const textfile = @import("textfile.zig");
+const Interval = @import("interval.zig").Interval;
 
 pub const dir_name = "session";
 
@@ -42,13 +43,11 @@ pub const Extras = struct {
 
 /// Saves periodically, and only when the session has changed.
 pub const Autosave = struct {
-    interval: f64 = 10,
-    last_check: f64 = 0,
+    every: Interval = .{ .seconds = 10 },
     last_saved: u64 = 0,
 
     pub fn due(a: *Autosave, now: f64, b: *const Buffer, extras: Extras) bool {
-        if (now - a.last_check < a.interval) return false;
-        a.last_check = now;
+        if (!a.every.due(now)) return false;
         return signature(b, extras) != a.last_saved;
     }
 
@@ -601,7 +600,7 @@ test "autosave waits for the interval and skips unchanged sessions" {
     var b = testBuffer();
     defer freeBuffer(&b);
     const view = try b.newScratch();
-    var a = Autosave{ .interval = 10 };
+    var a = Autosave{ .every = .{ .seconds = 10 } };
     a.markSaved(&b, .{});
 
     try testing.expect(!a.due(11, &b, .{}));

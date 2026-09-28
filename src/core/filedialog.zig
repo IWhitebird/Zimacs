@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const pen = @import("raylib");
+const native = @import("native.zig");
 
 pub const Kind = enum { open, save };
 
@@ -43,7 +44,7 @@ pub const Dialog = struct {
     /// kdialog on KDE.
     pub fn setUp(d: *Dialog, io: std.Io, env: *const std.process.Environ.Map) void {
         if (builtin.os.tag != .linux) return;
-        const on_kde = if (env.get("XDG_CURRENT_DESKTOP")) |desktop| std.mem.indexOf(u8, desktop, "KDE") != null else false;
+        const on_kde = if (env.get("XDG_CURRENT_DESKTOP")) |desktop| std.mem.find(u8, desktop, "KDE") != null else false;
         const order: []const Tool = if (on_kde) &.{ .kdialog, .zenity } else &.{ .zenity, .kdialog };
         const search = env.get("PATH") orelse return;
         for (order) |tool| {
@@ -121,7 +122,7 @@ pub const Dialog = struct {
         defer freeArguments(gpa, argv);
         d.path = d.runTool(gpa, io, argv) catch null;
         d.state.store(.done, .release);
-        wake();
+        native.wake();
     }
 
     fn runTool(d: *Dialog, gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
@@ -146,13 +147,6 @@ pub const Dialog = struct {
         return try gpa.dupe(u8, path);
     }
 };
-
-extern fn glfwPostEmptyEvent() void;
-
-/// The editor may be waiting for an event; this is one.
-fn wake() void {
-    if (builtin.os.tag != .emscripten) glfwPostEmptyEvent();
-}
 
 /// The command line for `tool`. Caller frees with `freeArguments`.
 pub fn arguments(gpa: std.mem.Allocator, tool: Tool, req: Request) ![]const []const u8 {
@@ -274,7 +268,7 @@ const win32 = struct {
             .save => GetSaveFileNameW(&ofn),
         };
         if (chosen == 0) return null;
-        const len = std.mem.indexOfScalar(u16, &file, 0) orelse file.len;
+        const len = std.mem.findScalar(u16, &file, 0) orelse file.len;
         return try std.unicode.wtf16LeToWtf8Alloc(gpa, file[0..len]);
     }
 };

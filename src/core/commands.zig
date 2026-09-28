@@ -82,7 +82,7 @@ pub fn run(action: Action) !void {
 }
 
 /// Saves, asking for a name first if the buffer has never had one.
-pub fn save() !void {
+fn save() !void {
     const view = app.buffer.current() orelse return;
     if (view.path == null) return browseToSave(false);
     _ = saveView(view);
@@ -208,7 +208,7 @@ pub fn checkDisk() void {
 /// Asks where to save the current tab, and closes it afterwards if
 /// `then_close`. Typing a name in the built-in browser and pressing Enter
 /// saves into whichever directory is showing.
-pub fn browseToSave(then_close: bool) !void {
+fn browseToSave(then_close: bool) !void {
     const view = app.buffer.current() orelse return;
     const io = app.io orelse return app.prompt.begin(.save_as, view.path orelse "");
 
@@ -250,7 +250,7 @@ pub fn saveInBrowser(typed: []const u8) !void {
 }
 
 /// Opens the file browser, starting beside the current file.
-pub fn browse(at: ?[]const u8) !void {
+fn browse(at: ?[]const u8) !void {
     const io = app.io orelse return app.prompt.begin(.open, "");
 
     const start = at orelse blk: {
@@ -289,7 +289,7 @@ pub fn chooseInBrowser(name: []const u8) !void {
 
 /// Opens a new GitHub issue, filled in with the version and the latest crash
 /// and update log, for the user to read over and send.
-pub fn reportProblem() void {
+fn reportProblem() void {
     const crash_text = if (app.data_dir) |d| if (app.io) |io| crash.last(app.gpa, io, d) else null else null;
     defer if (crash_text) |t| app.gpa.free(t);
     const update_log = readDataFile(updatelog.file_name);
@@ -314,7 +314,7 @@ fn readDataFile(name: []const u8) ?[]u8 {
 }
 
 /// From the Help menu. Official builds also install what they find.
-pub fn checkForUpdates() void {
+fn checkForUpdates() void {
     startUpdate(.{ .install = build_info.self_update, .announce = true });
 }
 
@@ -337,7 +337,7 @@ fn startUpdate(options: update_mod.Options) void {
     app.update.start(app.gpa, io, current, options);
 }
 
-pub fn openConfig() !void {
+fn openConfig() !void {
     const path = app.config_path orelse {
         tell(.problem, "There is no settings file on this platform", .{});
         return;
@@ -347,7 +347,7 @@ pub fn openConfig() !void {
 
 // ------------------------------------------------------------ clipboard
 
-pub fn copy(view: *BufferView) !void {
+fn copy(view: *BufferView) !void {
     if (!view.cursor.hasSelection()) return;
 
     var text: std.ArrayList(u8) = .empty;
@@ -357,7 +357,7 @@ pub fn copy(view: *BufferView) !void {
     pen.setClipboardText(text.items[0 .. text.items.len - 1 :0]);
 }
 
-pub fn paste(view: *BufferView) !void {
+fn paste(view: *BufferView) !void {
     const clip = pen.getClipboardText();
     if (clip.len == 0) return;
 
@@ -373,14 +373,14 @@ pub fn paste(view: *BufferView) !void {
 const max_seed = 256;
 
 /// Opens the find bar, seeded with the selection when it is a single line.
-pub fn openFind(replacing: bool) !void {
+fn openFind(replacing: bool) !void {
     app.prompt.cancel();
     const view = app.buffer.current();
     var seed: std.ArrayList(u8) = .empty;
     defer seed.deinit(app.gpa);
     if (view) |v| if (v.cursor.selection()) |r| if (r.len() <= max_seed) {
         try v.tree.copy(r.start, r.len(), &seed);
-        if (std.mem.indexOfScalar(u8, seed.items, '\n') != null) seed.clearRetainingCapacity();
+        if (std.mem.findScalar(u8, seed.items, '\n') != null) seed.clearRetainingCapacity();
     };
     try app.find.begin(view, replacing, if (seed.items.len > 0) seed.items else null);
 }
@@ -392,7 +392,7 @@ pub fn findStep(direction: find_mod.Direction) !void {
     try app.find.step(view, direction);
 }
 
-pub fn toggleWrap() void {
+fn toggleWrap() void {
     app.config.wrap_lines = !app.config.wrap_lines;
     for (app.buffer.views.items) |v| {
         v.left_column = 0;
