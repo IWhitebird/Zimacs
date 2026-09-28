@@ -9,13 +9,28 @@ const std = @import("std");
 pub fn codepoints(font: []const u8, out: []i32, keep: *const fn (u21) bool) []i32 {
     const table = subtable(font) orelse return out[0..0];
     var n: usize = 0;
-    switch (read(u16, table, 0) orelse return out[0..0]) {
-        4 => n = format4(table, out, keep),
-        12 => n = format12(table, out, keep),
-        else => {},
+    const format: Format = @enumFromInt(read(u16, table, 0) orelse return out[0..0]);
+    switch (format) {
+        .bmp => n = format4(table, out, keep),
+        .full => n = format12(table, out, keep),
+        _ => {},
     }
     return out[0..n];
 }
+
+/// Subtable formats: 4 maps the BMP in segments, 12 all of Unicode in groups.
+const Format = enum(u16) { bmp = 4, full = 12, _ };
+
+/// Encoding records' platforms, and the encodings under each that are Unicode:
+/// for Windows the BMP or all of it, for Unicode everything up to 3 is the
+/// BMP and 4 or 6 all of it.
+const platform_unicode = 0;
+const platform_windows = 3;
+const windows_bmp = 1;
+const windows_full = 10;
+const unicode_bmp_last = 3;
+const unicode_full = 4;
+const unicode_full_any = 6;
 
 /// The Unicode subtable, preferring the full-range one over the BMP one.
 fn subtable(font: []const u8) ?[]const u8 {
@@ -29,10 +44,12 @@ fn subtable(font: []const u8) ?[]const u8 {
         const offset = read(u32, cmap, record + 4) orelse return null;
         if (offset >= cmap.len) continue;
         const sub = cmap[offset..];
-        const full = (platform == 3 and encoding == 10) or (platform == 0 and (encoding == 4 or encoding == 6));
-        const basic = (platform == 3 and encoding == 1) or (platform == 0 and encoding <= 3);
-        if (full and read(u16, sub, 0) == 12) return sub;
-        if (basic and read(u16, sub, 0) == 4) bmp = sub;
+        const full = (platform == platform_windows and encoding == windows_full) or
+            (platform == platform_unicode and (encoding == unicode_full or encoding == unicode_full_any));
+        const basic = (platform == platform_windows and encoding == windows_bmp) or
+            (platform == platform_unicode and encoding <= unicode_bmp_last);
+        if (full and read(u16, sub, 0) == @intFromEnum(Format.full)) return sub;
+        if (basic and read(u16, sub, 0) == @intFromEnum(Format.bmp)) bmp = sub;
     }
     return bmp;
 }

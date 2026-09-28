@@ -117,30 +117,17 @@ pub const Config = struct {
         }
     }
 
+    /// A setting is the field of the same name, so a new one needs nothing
+    /// here; colours have keys of their own.
     fn applyPair(c: *Self, key: []const u8, value: []const u8) !void {
-        if (eq(key, "font_size")) {
-            c.font_size = try std.fmt.parseFloat(f32, value);
-        } else if (eq(key, "caret_style")) {
-            c.caret_style = std.meta.stringToEnum(CaretStyle, value) orelse return error.BadValue;
-        } else if (eq(key, "tab_width")) {
-            c.tab_width = try std.fmt.parseInt(u8, value, 10);
-        } else if (eq(key, "expand_tabs")) {
-            c.expand_tabs = try parseBool(value);
-        } else if (eq(key, "auto_close")) {
-            c.auto_close = try parseBool(value);
-        } else if (eq(key, "restore_session")) {
-            c.restore_session = try parseBool(value);
-        } else if (eq(key, "wrap_lines")) {
-            c.wrap_lines = try parseBool(value);
-        } else if (eq(key, "show_hidden")) {
-            c.show_hidden = try parseBool(value);
-        } else if (eq(key, "custom_titlebar")) {
-            c.custom_titlebar = try parseBool(value);
-        } else if (eq(key, "auto_update")) {
-            c.auto_update = try parseBool(value);
-        } else {
-            try c.colors.apply(key, value);
+        inline for (@typeInfo(Self).@"struct".fields) |field| {
+            if (comptime std.mem.eql(u8, field.name, "colors") or std.mem.eql(u8, field.name, "problem")) continue;
+            if (eq(key, field.name)) {
+                @field(c, field.name) = try parseSetting(field.type, value);
+                return;
+            }
         }
+        try c.colors.apply(key, value);
     }
 
     pub fn writeDefault(io: std.Io, dir: []const u8) !void {
@@ -251,6 +238,16 @@ fn parseColor(value: []const u8) !u24 {
     const digits = if (value.len > 0 and value[0] == '#') value[1..] else value;
     if (digits.len != 6) return error.BadValue;
     return std.fmt.parseInt(u24, digits, 16);
+}
+
+fn parseSetting(comptime T: type, value: []const u8) !T {
+    return switch (@typeInfo(T)) {
+        .bool => parseBool(value),
+        .int => std.fmt.parseInt(T, value, 10),
+        .float => std.fmt.parseFloat(T, value),
+        .@"enum" => std.meta.stringToEnum(T, value) orelse error.BadValue,
+        else => @compileError("no way to read a setting of type " ++ @typeName(T)),
+    };
 }
 
 fn parseBool(value: []const u8) !bool {

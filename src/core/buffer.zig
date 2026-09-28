@@ -255,13 +255,13 @@ pub const BufferView = struct {
     pub fn appendIndent(v: *const Self, line: u32, before: u32, out: *std.ArrayList(u8)) !void {
         const start = v.tree.lineStart(line);
         const stop = @min(before, v.tree.lineEnd(line));
-        if (stop <= start) return;
-        var head: std.ArrayList(u8) = .empty;
-        defer head.deinit(v.gpa);
-        try v.tree.copy(start, stop - start, &head);
-        var n: usize = 0;
-        while (n < head.items.len and (head.items[n] == ' ' or head.items[n] == '\t')) n += 1;
-        try out.appendSlice(v.gpa, head.items[0..n]);
+        // Read up to the first non-blank only: the line may be megabytes.
+        var end = start;
+        while (end < stop) : (end += 1) {
+            const c = v.tree.byteAt(end) orelse break;
+            if (c != ' ' and c != '\t') break;
+        }
+        if (end > start) try v.tree.copy(start, end - start, out);
     }
 
     /// The lines the selection touches, or just the caret's line.

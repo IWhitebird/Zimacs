@@ -14,7 +14,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/session.zig", .raylib = false },
     .{ .path = "src/core/search.zig", .raylib = false },
     .{ .path = "src/core/field.zig", .raylib = false },
-    .{ .path = "src/core/tabstrip.zig", .raylib = false },
+    .{ .path = "src/core/tabstrip.zig", .raylib = true },
     .{ .path = "src/core/textfile.zig", .raylib = false },
     .{ .path = "src/core/notice.zig", .raylib = false },
     .{ .path = "src/core/config.zig", .raylib = false },

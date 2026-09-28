@@ -164,10 +164,15 @@ pub fn columnAtTrack(track: pen.Rectangle, x: f32, visible: u32, total: u32) u32
     return offsetAt(track.width, x - track.x, visible, total);
 }
 
+/// The prompt panel takes this share of the text area's width, but no less
+/// than the minimum where there is room.
+const prompt_share = 0.6;
+const prompt_min_width = 320;
+
 /// The floating panel the prompt uses. Sits near the top of the text area,
 /// out of the way of what you are reading.
 pub fn promptPanel(l: Layout, cell: Metrics, rows: usize) pen.Rectangle {
-    const width = @min(@max(l.text.width * 0.6, 320), l.text.width - padding * 2);
+    const width = @min(@max(l.text.width * prompt_share, prompt_min_width), l.text.width - padding * 2);
     const height = cell.height + padding * 2 +
         @as(f32, @floatFromInt(rows)) * promptRowHeight(cell);
     return .{

@@ -32,14 +32,17 @@ const multi_click_seconds = 0.35;
 
 var last_click_time: f64 = -1;
 var click_streak: u8 = 0;
-var dragging = false;
-/// Where the text press landed. A drag only starts once the pointer leaves
-/// it, or holding the button after a double click would shrink the word
-/// selection back to the pointer.
-var press_point: pen.Vector2 = .{ .x = 0, .y = 0 };
-var drag_started = false;
-var dragging_bar = false;
-var dragging_hbar = false;
+/// What the held left button is doing.
+const Drag = union(enum) {
+    none,
+    /// Selecting from where the press landed. It only starts once the
+    /// pointer leaves that point, or holding the button after a double
+    /// click would shrink the word selection back to the pointer.
+    text: struct { from: pen.Vector2, moved: bool = false },
+    vertical_bar,
+    horizontal_bar,
+};
+var drag: Drag = .none;
 var caption = Caption{};
 
 pub const Input = struct {
@@ -579,11 +582,11 @@ fn mouse() !void {
     const l = editor.currentLayout();
 
     if (pen.isMouseButtonPressed(.left)) {
-        if (editor.closeAt(point, l)) |index| {
+        if (app.editor.tabs.closeAt(l.tabs, point)) |index| {
             try commands.requestClose(index);
             return;
         }
-        if (editor.tabAt(point, l)) |index| {
+        if (app.editor.tabs.tabAt(l.tabs, point)) |index| {
             app.buffer.select(index);
             return;
         }
@@ -591,12 +594,12 @@ fn mouse() !void {
         // Otherwise its track is an invisible strip that swallows clicks
         // meant for the text underneath it.
         if (onScrollbar(point, l, .vertical)) {
-            dragging_bar = true;
+            drag = .vertical_bar;
             scrollTo(point, l);
             return;
         }
         if (onScrollbar(point, l, .horizontal)) {
-            dragging_hbar = true;
+            drag = .horizontal_bar;
             scrollSidewaysTo(point, l);
             return;
         }
@@ -612,32 +615,27 @@ fn mouse() !void {
         }
     }
 
-    if (pen.isMouseButtonReleased(.left)) {
-        dragging = false;
-        dragging_bar = false;
-        dragging_hbar = false;
-    }
-
-    if (dragging_bar and pen.isMouseButtonDown(.left)) {
-        scrollTo(point, l);
+    // Also ends a drag whose release something else, such as a dialog, took.
+    if (!pen.isMouseButtonDown(.left)) {
+        drag = .none;
         return;
     }
-    if (dragging_hbar and pen.isMouseButtonDown(.left)) {
-        scrollSidewaysTo(point, l);
-        return;
-    }
-
-    if (dragging and pen.isMouseButtonDown(.left)) {
-        const view = app.buffer.current() orelse return;
-        if (!drag_started) {
-            const moved = @abs(point.x - press_point.x) + @abs(point.y - press_point.y);
-            if (moved < app.font.metrics.width / 2) return;
-            drag_started = true;
-        }
-        view.cursor.moveTo(&view.tree, offsetAt(view, point, l), true);
-        // Drag past the top or bottom edge to keep scrolling.
-        if (point.y < l.text.y) app.editor.scroll(-1);
-        if (point.y > l.text.y + l.text.height) app.editor.scroll(1);
+    switch (drag) {
+        .none => {},
+        .vertical_bar => scrollTo(point, l),
+        .horizontal_bar => scrollSidewaysTo(point, l),
+        .text => |*t| {
+            const view = app.buffer.current() orelse return;
+            if (!t.moved) {
+                const moved = @abs(point.x - t.from.x) + @abs(point.y - t.from.y);
+                if (moved < app.font.metrics.width / 2) return;
+                t.moved = true;
+            }
+            view.cursor.moveTo(&view.tree, offsetAt(view, point, l), true);
+            // Drag past the top or bottom edge to keep scrolling.
+            if (point.y < l.text.y) app.editor.scroll(-1);
+            if (point.y > l.text.y + l.text.height) app.editor.scroll(1);
+        },
     }
 }
 
@@ -671,9 +669,7 @@ fn beginGutterClick(point: pen.Vector2, l: layout_mod.Layout) void {
     const view = app.buffer.current() orelse return;
     view.cursor.moveTo(&view.tree, offsetAt(view, point, l), shiftDown());
     view.cursor.selectLine(&view.tree);
-    press_point = point;
-    drag_started = false;
-    dragging = true;
+    drag = .{ .text = .{ .from = point } };
 }
 
 fn beginClick(point: pen.Vector2, l: layout_mod.Layout) void {
@@ -686,24 +682,17 @@ fn beginClick(point: pen.Vector2, l: layout_mod.Layout) void {
     last_click_time = now;
 
     const offset = offsetAt(view, point, l);
-    press_point = point;
-    drag_started = false;
+    // Held after a double or triple click, the drag carries on extending.
+    drag = .{ .text = .{ .from = point } };
     switch (click_streak) {
-        1 => {
-            view.cursor.moveTo(&view.tree, offset, extend);
-            dragging = true;
-        },
+        1 => view.cursor.moveTo(&view.tree, offset, extend),
         2 => {
             view.cursor.moveTo(&view.tree, offset, false);
             view.cursor.selectWord(&view.tree);
-            // Keep dragging live, so holding after a double click carries on
-            // extending the selection.
-            dragging = true;
         },
         else => {
             view.cursor.moveTo(&view.tree, offset, false);
             view.cursor.selectLine(&view.tree);
-            dragging = true;
             click_streak = 0;
         },
     }
