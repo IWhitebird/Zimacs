@@ -18,6 +18,11 @@ const dialog_mod = @import("dialog.zig");
 const notice_mod = @import("notice.zig");
 const selfupdate = @import("selfupdate.zig");
 const build_info = @import("build_info");
+const builtin = @import("builtin");
+const crash = @import("crash.zig");
+const report_mod = @import("report.zig");
+const system = @import("system.zig");
+const updatelog = @import("updatelog.zig");
 
 pub fn run(action: Action) !void {
     switch (action) {
@@ -27,6 +32,7 @@ pub fn run(action: Action) !void {
         .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
+        .report_problem => reportProblem(),
         .about => app.menu.showing_about = true,
 
         .save => try save(),
@@ -224,6 +230,32 @@ pub fn chooseInBrowser(name: []const u8) !void {
     }
     app.prompt.cancel();
     app.openFile(full) catch |err| report("Could not open", err);
+}
+
+/// Opens a new GitHub issue, filled in with the version and the latest crash
+/// and update log, for the user to read over and send.
+pub fn reportProblem() void {
+    const crash_text = if (app.data_dir) |d| if (app.io) |io| crash.last(app.gpa, io, d) else null else null;
+    defer if (crash_text) |t| app.gpa.free(t);
+    const update_log = readDataFile(updatelog.file_name);
+    defer if (update_log) |t| app.gpa.free(t);
+
+    const url = report_mod.issueUrl(app.gpa, .{
+        .version = app.version,
+        .platform = @tagName(builtin.cpu.arch) ++ "-" ++ @tagName(builtin.os.tag),
+        .crash = crash_text,
+        .update_log = update_log,
+    }) catch |err| return report("Could not write the report", err);
+    defer app.gpa.free(url);
+    system.openUrl(app.gpa, app.io, url) catch |err| report("Could not open the browser", err);
+}
+
+fn readDataFile(name: []const u8) ?[]u8 {
+    const dir_path = app.data_dir orelse return null;
+    const io = app.io orelse return null;
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return null;
+    defer dir.close(io);
+    return dir.readFileAlloc(io, name, app.gpa, .limited(64 * 1024)) catch null;
 }
 
 /// From the Help menu. Official builds also install what they find.

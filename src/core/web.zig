@@ -1,6 +1,7 @@
-//! Browser calls for the web build: fetching a file over HTTP and writing
-//! to the console. They compile to nothing elsewhere.
+//! Browser calls for the web build: fetching a file over HTTP, opening a
+//! link and writing to the console. They compile to nothing elsewhere.
 
+const std = @import("std");
 const builtin = @import("builtin");
 
 const on_web = builtin.os.tag == .emscripten;
@@ -29,11 +30,20 @@ fn failed(_: ?*anyopaque) callconv(.c) void {
     pending = null;
 }
 
+/// `url` must already be percent-encoded, so it holds no quote to escape.
+pub fn openUrl(url: []const u8) void {
+    if (!on_web) return;
+    var buf: [8192]u8 = undefined;
+    const script = std.fmt.bufPrintZ(&buf, "window.open(\"{s}\", \"_blank\")", .{url}) catch return;
+    emscripten_run_script(script);
+}
+
 pub fn consoleError(text: [*:0]const u8) void {
     if (on_web) emscripten_console_error(text);
 }
 
 extern fn emscripten_console_error(text: [*:0]const u8) void;
+extern fn emscripten_run_script(script: [*:0]const u8) void;
 extern fn emscripten_async_wget_data(
     url: [*:0]const u8,
     arg: ?*anyopaque,

@@ -8,6 +8,11 @@ $ErrorActionPreference = "Stop"
 $repo = "IWhitebird/Zimacs"
 $root = Join-Path $env:LOCALAPPDATA "Programs\Zimacs"
 
+# Windows will not replace a running exe, so say so before downloading.
+$running = Get-Process -Name Zimacs -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$root\*" }
+if ($running) { throw "Zimacs is running. Close it, then run this again." }
+
 Write-Host "Looking up the latest release"
 $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
 $tag = $release.tag_name

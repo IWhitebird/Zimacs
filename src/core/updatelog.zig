@@ -2,6 +2,7 @@
 //! failure that happened while nobody was looking can still be explained.
 
 const std = @import("std");
+const Utc = @import("utc.zig").Utc;
 
 pub const file_name = "update.log";
 /// Past this the older half is dropped.
@@ -41,8 +42,7 @@ pub const Log = struct {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(gpa);
         try out.appendSlice(gpa, keptPart(old));
-        try writeStamp(gpa, &out, seconds);
-        try out.print(gpa, "  " ++ fmt ++ "\n", args);
+        try out.print(gpa, "{f}  " ++ fmt ++ "\n", .{Utc{ .seconds = seconds }} ++ args);
         try dir.writeFile(io, .{ .sub_path = file_name, .data = out.items });
     }
 };
@@ -53,18 +53,6 @@ fn keptPart(old: []const u8) []const u8 {
     const half = old[old.len - max_bytes / 2 ..];
     const line = std.mem.indexOfScalar(u8, half, '\n') orelse return "";
     return half[line + 1 ..];
-}
-
-/// UTC, as `2026-09-24 11:08:00`.
-fn writeStamp(gpa: std.mem.Allocator, out: *std.ArrayList(u8), seconds: i64) !void {
-    const epoch = std.time.epoch.EpochSeconds{ .secs = @intCast(@max(seconds, 0)) };
-    const day = epoch.getEpochDay().calculateYearDay();
-    const month_day = day.calculateMonthDay();
-    const time = epoch.getDaySeconds();
-    try out.print(gpa, "{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-        day.year,               month_day.month.numeric(), month_day.day_index + 1,
-        time.getHoursIntoDay(), time.getMinutesIntoHour(), time.getSecondsIntoMinute(),
-    });
 }
 
 // ---------------------------------------------------------------- tests

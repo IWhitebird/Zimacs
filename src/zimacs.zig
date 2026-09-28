@@ -14,6 +14,7 @@ const pen = @import("raylib");
 const build_info = @import("build_info");
 const commands = @import("core/commands.zig");
 const config_mod = @import("core/config.zig");
+const crash = @import("core/crash.zig");
 const idle = @import("core/idle.zig");
 const paths = @import("core/paths.zig");
 const recent_mod = @import("core/recent.zig");
@@ -91,6 +92,8 @@ pub var notice = Notice{};
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
+/// Where the session, recent files and logs live. Null where there is none.
+pub var data_dir: ?[]const u8 = null;
 
 var artifacts: std.ArrayList(Artifact) = .empty;
 
@@ -143,15 +146,21 @@ pub fn run(start: Start) !void {
     try font.load();
     defer font.unload();
 
-    const data_dir = try dataDir(start);
+    data_dir = try dataDir(start);
     defer if (data_dir) |d| gpa.free(d);
     if (data_dir) |d| if (io) |active_io| recent.load(active_io, d) catch {};
     if (data_dir) |d| update.log.setDir(d);
+    var crashed_last_time = false;
+    if (data_dir) |d| if (io) |active_io| {
+        crash.setUp(active_io, d, version);
+        crashed_last_time = crash.takeNew(active_io, d);
+    };
 
     try openStartingBuffers(start, session_dir);
     if (config.problem) |problem| {
         commands.tell(.problem, "{s} line {d}: {s}", .{ config_mod.file_name, problem.line, problem.why });
     }
+    if (crashed_last_time) commands.tell(.problem, "Zimacs crashed last time. Help > Report a Problem sends the details.", .{});
 
     commands.removeUpdateLeftovers();
     if (io) |active_io| idle.start(active_io);

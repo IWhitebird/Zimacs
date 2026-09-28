@@ -46,6 +46,7 @@ pub const Action = enum {
 
     open_config,
     check_updates,
+    report_problem,
     about,
 };
 
@@ -101,6 +102,7 @@ pub const bar = [_]Group{
     .{ .title = "Help", .entries = &.{
         .{ .label = "Edit Settings", .shortcut = "Ctrl+,", .action = .open_config },
         .{ .label = "Check for Updates", .action = .check_updates },
+        .{ .label = "Report a Problem", .action = .report_problem },
         .{ .label = "About Zimacs", .action = .about },
     } },
 };

@@ -65,6 +65,8 @@ pub const Window = struct {
         });
         if (builtin.mode != .Debug) pen.setTraceLogLevel(.warning);
         pen.initWindow(w.width, w.height, w.title);
+        // raylib only logs a failure here and carries on without a window.
+        if (!pen.isWindowReady()) return error.NoDisplay;
         pen.setTargetFPS(w.target_fps);
         // raylib closes on Escape by default.
         pen.setExitKey(.null);
