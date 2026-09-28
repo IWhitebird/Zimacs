@@ -128,6 +128,7 @@ pub fn run(start: Start) !void {
     font.base = config.font_size;
     font.size = std.math.clamp(config.font_size + last.zoom, Font.min_size, Font.max_size);
     window.restoreTo(last.window);
+    if (start.env) |env| window.startup_id = env.get("DESKTOP_STARTUP_ID");
 
     defer artifacts.deinit(gpa);
     try artifacts.appendSlice(gpa, &.{

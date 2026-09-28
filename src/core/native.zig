@@ -38,6 +38,13 @@ pub fn roundCorners() void {
     if (builtin.os.tag == .windows) win32.roundCorners();
 }
 
+/// Tells the desktop that the launch it announced with `id` is done, so its
+/// launcher stops waiting for the window. Until then GNOME treats the app as
+/// still starting and ignores clicks on its icon.
+pub fn finishStartup(id: []const u8) void {
+    if (builtin.os.tag == .linux) x11.finishStartup(id);
+}
+
 /// Desktop pointer position, in window-system pixels. Asked of the system
 /// because window position plus pointer update a frame apart mid-drag.
 pub fn cursorOnScreen() ?pen.Vector2 {
@@ -96,6 +103,7 @@ const x11 = struct {
     const ButtonReleaseMask: c_long = 1 << 3;
     const SubstructureNotifyMask: c_long = 1 << 19;
     const SubstructureRedirectMask: c_long = 1 << 20;
+    const PropertyChangeMask: c_long = 1 << 22;
     const Button1Mask: c_uint = 1 << 8;
     const XA_ATOM: Atom = 4;
     const CurrentTime: c_ulong = 0;
@@ -174,6 +182,52 @@ const x11 = struct {
 
     /// Whether the window manager lists _NET_WM_MOVERESIZE. Asked once.
     var supported: ?bool = null;
+
+    /// Bytes of text one format-8 client message carries.
+    const message_chunk = 20;
+    /// Room for the "remove" message; launchers' IDs are far shorter.
+    const max_startup_message = 512;
+
+    /// The startup-notification "remove" message, sent to the root window
+    /// in 20-byte pieces as the freedesktop spec lays out.
+    fn finishStartup(id: []const u8) void {
+        const d = glfwGetX11Display() orelse return;
+        var buf: [max_startup_message]u8 = undefined;
+        const message = startupMessage(&buf, id) orelse return;
+        const window = glfwGetX11Window(glfw.glfwGetCurrentContext());
+        const first = XInternAtom(d, "_NET_STARTUP_INFO_BEGIN", 0);
+        const rest = XInternAtom(d, "_NET_STARTUP_INFO", 0);
+
+        var at: usize = 0;
+        while (at < message.len) : (at += message_chunk) {
+            var event = Event{ .client = .{
+                .type = ClientMessage,
+                .serial = 0,
+                .send_event = 1,
+                .display = d,
+                .window = window,
+                .message_type = if (at == 0) first else rest,
+                .format = 8,
+                .data = @splat(0),
+            } };
+            const piece = message[at..@min(at + message_chunk, message.len)];
+            @memcpy(std.mem.asBytes(&event.client.data)[0..piece.len], piece);
+            _ = XSendEvent(d, XDefaultRootWindow(d), 0, PropertyChangeMask, &event);
+        }
+        _ = XFlush(d);
+    }
+
+    /// `remove: ID=...` with its terminating zero, escaped the way GTK does.
+    fn startupMessage(buf: []u8, id: []const u8) ?[]const u8 {
+        var out = std.Io.Writer.fixed(buf);
+        out.writeAll("remove: ID=") catch return null;
+        for (id) |c| {
+            if (c == ' ' or c == '"' or c == '\\') out.writeByte('\\') catch return null;
+            out.writeByte(c) catch return null;
+        }
+        out.writeByte(0) catch return null;
+        return out.buffered();
+    }
 
     fn cursor() ?pen.Vector2 {
         const d = glfwGetX11Display() orelse return null;
@@ -305,6 +359,14 @@ test "every edge and corner maps to its _NET_WM_MOVERESIZE direction" {
     try testing.expectEqual(@as(c_long, 5), x11.direction(.{ .bottom = true }));
     try testing.expectEqual(@as(c_long, 6), x11.direction(.{ .bottom = true, .left = true }));
     try testing.expectEqual(@as(c_long, 7), x11.direction(.{ .left = true }));
+}
+
+test "the startup message escapes the ID and ends in a zero" {
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("remove: ID=gnome-shell/Zimacs/1_TIME5\x00", x11.startupMessage(&buf, "gnome-shell/Zimacs/1_TIME5").?);
+    try testing.expectEqualStrings("remove: ID=a\\ b\\\"c\x00", x11.startupMessage(&buf, "a b\"c").?);
+    var small: [8]u8 = undefined;
+    try testing.expect(x11.startupMessage(&small, "too long for it") == null);
 }
 
 test "Xlib event layouts match the C ABI on this target" {

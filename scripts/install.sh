@@ -80,6 +80,7 @@ TryExec=$libdir/Zimacs
 Icon=zimacs
 Terminal=false
 StartupNotify=true
+StartupWMClass=Zimacs
 Categories=Utility;TextEditor;
 MimeType=text/plain;text/markdown;text/x-csrc;text/x-chdr;text/x-python;application/json;
 Keywords=text;editor;code;

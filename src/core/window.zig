@@ -34,6 +34,8 @@ pub const Window = struct {
     close_requested: bool = false,
     drag: ?Drag = null,
     restore_to: ?Placement = null,
+    /// The launcher's startup-notification ID, answered once the window shows.
+    startup_id: ?[]const u8 = null,
     /// Last size and position while neither maximised nor minimised.
     normal: ?Placement = null,
     was_maximized: bool = false,
@@ -77,6 +79,7 @@ pub const Window = struct {
         if (hidden) pen.clearWindowState(.{ .window_hidden = true });
         // Maximised after showing: some window managers ignore it before.
         if (w.restore_to) |p| if (p.maximized) pen.maximizeWindow();
+        if (w.startup_id) |id| native.finishStartup(id);
     }
 
     pub fn deinit(ctx: *anyopaque) !void {
