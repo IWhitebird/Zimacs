@@ -10,7 +10,6 @@ const editor = @import("editor.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const layout_mod = @import("layout.zig");
 const text_mod = @import("text.zig");
-const wrap_mod = @import("wrap.zig");
 const commands = @import("commands.zig");
 const menu_mod = @import("menu.zig");
 const titlebar = @import("titlebar.zig");
@@ -19,6 +18,7 @@ const dialog_mod = @import("dialog.zig");
 const TextField = @import("field.zig").TextField;
 const BufferView = @import("buffer.zig").BufferView;
 const typing = @import("typing.zig");
+const wrap = @import("wrap.zig");
 const language = @import("language.zig");
 const browser_mod = @import("browser.zig");
 
@@ -380,6 +380,51 @@ fn pageRows() u32 {
 
 // ------------------------------------------------------------- movement
 
+/// The column along the row that Up and Down aim for while lines are folded,
+/// kept while the caret is where the last such move left it.
+var row_goal: ?struct { offset: u32, column: u32 } = null;
+
+/// Up and Down while lines are folded: to the screen row above or below,
+/// which may be part of the same line.
+fn moveRow(view: *BufferView, direction: enum { up, down }, extend: bool) void {
+    const l = editor.currentLayout();
+    const fold = editor.foldFor(l, app.font.metrics);
+    const tree = &view.tree;
+    const at = view.cursor.position(tree);
+
+    var raw: std.ArrayList(u8) = .empty;
+    defer raw.deinit(app.gpa);
+    tree.lineContent(at.line, &raw) catch return;
+    const here = wrap.place(view.rows.breaksOf(tree, fold, at.line), text_mod.columnOf(raw.items, at.column, fold.tab));
+    const goal = if (row_goal) |g| if (g.offset == view.cursor.offset) g.column else here.column else here.column;
+
+    var line = at.line;
+    var row = here.row;
+    switch (direction) {
+        .up => if (row > 0) {
+            row -= 1;
+        } else if (line > 0) {
+            line -= 1;
+            row = view.rows.count(tree, fold, line) - 1;
+        } else return view.cursor.moveTo(tree, 0, extend),
+        .down => if (row + 1 < view.rows.count(tree, fold, line)) {
+            row += 1;
+        } else if (line + 1 < tree.lineCount()) {
+            line += 1;
+            row = 0;
+        } else return view.cursor.moveTo(tree, tree.len(), extend),
+    }
+
+    raw.clearRetainingCapacity();
+    tree.lineContent(line, &raw) catch return;
+    const starts = view.rows.breaksOf(tree, fold, line);
+    var column = starts[row] + goal;
+    if (row + 1 < starts.len) column = @min(column, starts[row + 1] -| 1);
+    const byte = text_mod.offsetOf(raw.items, column, fold.tab);
+    view.cursor.moveTo(tree, tree.lineStart(line) + byte, extend);
+    row_goal = .{ .offset = view.cursor.offset, .column = goal };
+}
+
 fn moveCursor() void {
     const view = app.buffer.current() orelse return;
     const tree = &view.tree;
@@ -389,8 +434,13 @@ fn moveCursor() void {
 
     if (pressed(.left)) if (ctrl) cursor.wordLeft(tree, extend) else cursor.left(tree, extend);
     if (pressed(.right)) if (ctrl) cursor.wordRight(tree, extend) else cursor.right(tree, extend);
-    if (pressed(.up)) cursor.up(tree, extend);
-    if (pressed(.down)) cursor.down(tree, extend);
+    if (app.config.wrap_lines) {
+        if (pressed(.up)) moveRow(view, .up, extend);
+        if (pressed(.down)) moveRow(view, .down, extend);
+    } else {
+        if (pressed(.up)) cursor.up(tree, extend);
+        if (pressed(.down)) cursor.down(tree, extend);
+    }
 
     if (pressed(.home)) {
         if (ctrl) cursor.toStart(tree, extend) else cursor.home(tree, extend);
@@ -605,8 +655,11 @@ fn onScrollbar(point: pen.Vector2, l: layout_mod.Layout, which: Bar) bool {
     const view = app.buffer.current() orelse return false;
     const cell = app.font.metrics;
     return switch (which) {
-        .vertical => pen.checkCollisionPointRec(point, l.scrollbar) and
-            layout_mod.thumb(l.scrollbar, view.top_line, l.rows(cell), view.tree.lineCount()) != null,
+        .vertical => blk: {
+            const extent = editor.scrollExtent(view, l, cell);
+            break :blk pen.checkCollisionPointRec(point, l.scrollbar) and
+                layout_mod.thumb(l.scrollbar, extent.top, l.rows(cell), extent.total) != null;
+        },
         .horizontal => blk: {
             const track = layout_mod.horizontalTrack(l);
             const visible = editor.visibleColumns(l, cell);
@@ -676,19 +729,18 @@ fn offsetAt(
 
     if (app.config.wrap_lines) {
         // Walk down the folded rows until the clicked one is reached.
-        const span = editor.visibleColumns(l, cell);
-        var row = at.row;
-        var skip = view.top_row;
-        while (line + 1 < view.tree.lineCount()) {
-            raw.clearRetainingCapacity();
-            view.tree.lineContent(line, &raw) catch break;
-            const pieces = wrap_mod.rowsFor(text_mod.width(raw.items, app.config.tab_width), span) - skip;
-            if (row < pieces) break;
-            row -= pieces;
-            skip = 0;
-            line += 1;
+        const fold = editor.foldFor(l, cell);
+        var row = at.row + view.top_row;
+        while (line + 1 < view.tree.lineCount()) : (line += 1) {
+            const rows = view.rows.count(&view.tree, fold, line);
+            if (row < rows) break;
+            row -= rows;
         }
-        column = wrap_mod.rowStart(row + skip, span) + at.column;
+        const starts = view.rows.breaksOf(&view.tree, fold, line);
+        const piece = @min(row, starts.len - 1);
+        column = starts[piece] + at.column;
+        // Past the end of a row is its end, not the start of the next.
+        if (piece + 1 < starts.len) column = @min(column, starts[piece + 1] -| 1);
     } else {
         line = @min(view.top_line + at.row, view.tree.lineCount() - 1);
     }
@@ -704,15 +756,13 @@ fn offsetAt(
 /// Jumps the view to wherever the scrollbar was grabbed.
 fn scrollTo(point: pen.Vector2, l: layout_mod.Layout) void {
     const view = app.buffer.current() orelse return;
-    const rows = l.rows(app.font.metrics);
-    const bar = layout_mod.thumb(l.scrollbar, view.top_line, rows, view.tree.lineCount()) orelse return;
+    const cell = app.font.metrics;
+    const rows = l.rows(cell);
+    const extent = editor.scrollExtent(view, l, cell);
+    const bar = layout_mod.thumb(l.scrollbar, extent.top, rows, extent.total) orelse return;
     // Centre the thumb on the pointer so it does not jump on grab.
-    view.top_line = layout_mod.lineAtTrack(
-        l.scrollbar,
-        point.y - bar.height / 2,
-        rows,
-        view.tree.lineCount(),
-    );
+    const row = layout_mod.lineAtTrack(l.scrollbar, point.y - bar.height / 2, rows, extent.total);
+    editor.scrollToRow(view, l, cell, row);
 }
 
 fn scrollSidewaysTo(point: pen.Vector2, l: layout_mod.Layout) void {

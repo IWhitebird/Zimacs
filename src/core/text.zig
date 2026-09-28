@@ -120,7 +120,7 @@ pub fn expand(line: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator,
     }
 }
 
-fn tabAdvance(column: u32, tab_width: u8) u32 {
+pub fn tabAdvance(column: u32, tab_width: u8) u32 {
     const stop = @max(tab_width, 1);
     return stop - column % stop;
 }

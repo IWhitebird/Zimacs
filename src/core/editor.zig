@@ -39,6 +39,8 @@ pub const Editor = struct {
     row_lines: std.ArrayList(?u32) = .empty,
     /// Search matches on screen this frame.
     matches: std.ArrayList(search.Match) = .empty,
+    /// Where the rows of the line being drawn start, while lines are folded.
+    starts: std.ArrayList(u32) = .empty,
     /// The brackets marked around the caret, looked for again only when the
     /// caret or the text changes.
     bracket_pair: ?brackets.Pair = null,
@@ -71,6 +73,7 @@ pub const Editor = struct {
         e.status.deinit(app.gpa);
         e.row_lines.deinit(app.gpa);
         e.matches.deinit(app.gpa);
+        e.starts.deinit(app.gpa);
         e.tab_widths.deinit(app.gpa);
     }
 
@@ -101,14 +104,15 @@ pub const Editor = struct {
         drawFrame(l);
     }
 
-    /// Scrolls vertically without moving the caret.
-    pub fn scroll(e: *Self, lines: i32) void {
+    /// Scrolls vertically without moving the caret, by rows: lines, or
+    /// screen rows while lines are folded.
+    pub fn scroll(e: *Self, rows: i32) void {
         _ = e;
         const view = app.buffer.current() orelse return;
-        const rows = currentLayout().rows(app.font.metrics);
-        const max = view.tree.lineCount() -| rows;
-        const next = @as(i64, view.top_line) + lines;
-        view.top_line = if (next <= 0) 0 else @min(@as(u32, @intCast(next)), max);
+        const l = currentLayout();
+        const cell = app.font.metrics;
+        const next = @as(i64, scrollExtent(view, l, cell).top) + rows;
+        scrollToRow(view, l, cell, if (next <= 0) 0 else @intCast(next));
     }
 
     pub fn scrollSideways(e: *Self, columns: i32) void {
@@ -127,18 +131,24 @@ pub const Editor = struct {
     fn follow(e: *Self, view: *BufferView, l: Layout, cell: Metrics) !void {
         const rows = l.rows(cell);
         if (rows == 0) return;
-        defer view.top_line = @min(view.top_line, view.tree.lineCount() -| rows);
+        // The text may have shrunk under the view.
+        defer scrollToRow(view, l, cell, scrollExtent(view, l, cell).top);
 
         if (view.followed) |seen| if (seen == view.cursor.offset) return;
         view.followed = view.cursor.offset;
 
         const at = view.cursor.position(&view.tree);
-        if (at.line < view.top_line) {
-            view.top_line = at.line;
-            view.top_row = 0;
-        } else if (at.line >= view.top_line + rows) {
-            view.top_line = at.line - rows + 1;
-            view.top_row = 0;
+        const column = try e.columnOf(view, at.line, at.column);
+        const caret_row = if (app.config.wrap_lines) blk: {
+            const fold = foldFor(l, cell);
+            const placed = wrap.place(view.rows.breaksOf(&view.tree, fold, at.line), column);
+            break :blk view.rows.above(&view.tree, fold, at.line) + placed.row;
+        } else at.line;
+        const top = scrollExtent(view, l, cell).top;
+        if (caret_row < top) {
+            scrollToRow(view, l, cell, caret_row);
+        } else if (caret_row >= top + rows) {
+            scrollToRow(view, l, cell, caret_row - rows + 1);
         }
 
         if (app.config.wrap_lines) {
@@ -147,7 +157,6 @@ pub const Editor = struct {
             return;
         }
 
-        const column = try e.columnOf(view, at.line, at.column);
         const visible = visibleColumns(l, cell);
         if (column < view.left_column) {
             view.left_column = column;
@@ -166,26 +175,18 @@ pub const Editor = struct {
         line: u32,
         column: u32,
     ) !?struct { row: u32, column: u32 } {
+        _ = e;
         if (line < view.top_line) return null;
         if (!app.config.wrap_lines) {
             return .{ .row = line - view.top_line, .column = column };
         }
 
-        const span = visibleColumns(l, cell);
-        const placed = wrap.place(column, span);
-
-        // Count the rows taken by the lines above this one.
-        var row: u32 = 0;
-        var scan = view.top_line;
-        while (scan < line) : (scan += 1) {
-            e.raw.clearRetainingCapacity();
-            try view.tree.lineContent(scan, &e.raw);
-            row += wrap.rowsFor(text.width(e.raw.items, app.config.tab_width), span);
-            if (row > l.rows(cell)) return null;
-        }
-        const above = if (scan == view.top_line) view.top_row else 0;
-        if (placed.row < above) return null;
-        return .{ .row = row + placed.row - above, .column = placed.column };
+        const fold = foldFor(l, cell);
+        const placed = wrap.place(view.rows.breaksOf(&view.tree, fold, line), column);
+        const top = view.rows.above(&view.tree, fold, view.top_line) + view.top_row;
+        const row = view.rows.above(&view.tree, fold, line) + placed.row;
+        if (row < top) return null;
+        return .{ .row = row - top, .column = placed.column };
     }
 
     /// The screen column of a byte offset within a line.
@@ -213,7 +214,7 @@ pub const Editor = struct {
         const selection = view.cursor.selection();
         const tab = app.config.tab_width;
         const wrapping = app.config.wrap_lines;
-        const span = visibleColumns(l, cell);
+        const fold = foldFor(l, cell);
         const shift = if (wrapping) 0 else @as(f32, @floatFromInt(view.left_column)) * cell.width;
 
         e.row_lines.clearRetainingCapacity();
@@ -231,7 +232,8 @@ pub const Editor = struct {
             const columns = text.width(e.raw.items, tab);
             widest = @max(widest, columns);
 
-            const pieces = if (wrapping) wrap.rowsFor(columns, span) else 1;
+            if (wrapping) try wrap.breaks(app.gpa, e.raw.items, fold, &e.starts);
+            const pieces: u32 = if (wrapping) @intCast(e.starts.items.len) else 1;
             var piece = skip;
             skip = 0;
             while (piece < pieces and row < rows) : ({
@@ -241,8 +243,8 @@ pub const Editor = struct {
                 try e.row_lines.append(app.gpa, if (piece == 0) line else null);
 
                 const y = l.text.y + @as(f32, @floatFromInt(row)) * cell.height;
-                const from = if (wrapping) wrap.rowStart(piece, span) else 0;
-                const to = if (wrapping) @min(from + span, columns) else columns;
+                const from = if (wrapping) e.starts.items[piece] else 0;
+                const to = if (wrapping and piece + 1 < pieces) e.starts.items[piece + 1] else columns;
 
                 if (line == active and selection == null) {
                     pen.drawRectangleRec(
@@ -399,7 +401,8 @@ pub const Editor = struct {
         const pointer = pen.getMousePosition();
 
         pen.drawRectangleRec(l.scrollbar, theme.current.background);
-        if (layout.thumb(l.scrollbar, view.top_line, l.rows(cell), view.tree.lineCount())) |bar| {
+        const extent = scrollExtent(view, l, cell);
+        if (layout.thumb(l.scrollbar, extent.top, l.rows(cell), extent.total)) |bar| {
             pen.drawRectangleRounded(bar, 0.6, 4, if (pen.checkCollisionPointRec(pointer, l.scrollbar))
                 theme.current.scrollbar_hover
             else
@@ -1031,6 +1034,35 @@ pub fn promptRowAt(point: pen.Vector2, l: Layout, cell: Metrics) ?usize {
 pub fn currentLayout() Layout {
     const lines = if (app.buffer.current()) |v| v.tree.lineCount() else 1;
     return Layout.compute(app.font.metrics, lines, app.buffer.views.items.len > 0, app.window.custom_frame);
+}
+
+/// How lines fold in this layout.
+pub fn foldFor(l: Layout, cell: Metrics) wrap.Fold {
+    return .{ .width = visibleColumns(l, cell), .tab = app.config.tab_width };
+}
+
+/// Where the view is scrolled to and how far it can go, in rows: document
+/// lines, or screen rows while lines are folded.
+pub fn scrollExtent(view: *BufferView, l: Layout, cell: Metrics) struct { top: u32, total: u32 } {
+    if (!app.config.wrap_lines) return .{ .top = view.top_line, .total = view.tree.lineCount() };
+    const fold = foldFor(l, cell);
+    return .{
+        .top = view.rows.above(&view.tree, fold, view.top_line) + view.top_row,
+        .total = view.rows.total(&view.tree, fold),
+    };
+}
+
+/// Puts row `row` at the top, stopping where the last row reaches the bottom.
+pub fn scrollToRow(view: *BufferView, l: Layout, cell: Metrics, row: u32) void {
+    const top = @min(row, scrollExtent(view, l, cell).total -| l.rows(cell));
+    if (!app.config.wrap_lines) {
+        view.top_line = top;
+        view.top_row = 0;
+        return;
+    }
+    const at = view.rows.lineAt(&view.tree, foldFor(l, cell), top);
+    view.top_line = at.line;
+    view.top_row = at.row;
 }
 
 /// How many whole columns of text fit across the text area.

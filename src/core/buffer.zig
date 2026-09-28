@@ -16,6 +16,7 @@ const Cursor = @import("cursor.zig").Cursor;
 const History = @import("history.zig").History;
 const text_mod = @import("text.zig");
 const language_mod = @import("language.zig");
+const wrap = @import("wrap.zig");
 const Language = language_mod.Language;
 const textfile = @import("textfile.zig");
 pub const Format = textfile.Format;
@@ -58,6 +59,8 @@ pub const BufferView = struct {
     format: Format = .{},
     /// Told from the name, so it follows a Save As.
     language: *const Language = &language_mod.plain,
+    /// How many screen rows each line takes when lines are folded.
+    rows: wrap.Rows,
     /// The file as last read or written, to notice changes made elsewhere.
     disk: ?Stamp = null,
 
@@ -82,6 +85,7 @@ pub const BufferView = struct {
     pub fn deinit(v: *Self) void {
         v.tree.deinit();
         v.history.deinit();
+        v.rows.deinit();
         if (v.path) |p| v.gpa.free(p);
         v.gpa.free(v.name);
     }
@@ -93,9 +97,7 @@ pub const BufferView = struct {
         if (len > 0) try v.tree.copy(offset, len, &removed);
 
         const before = v.cursor.offset;
-        if (len > 0) try v.tree.delete(offset, len);
-        if (text.len > 0) try v.tree.insert(offset, text);
-        v.version += 1;
+        try v.replace(offset, removed.items, text);
 
         v.cursor.offset = offset + @as(u32, @intCast(text.len));
         v.cursor.afterEdit(&v.tree);
@@ -346,20 +348,30 @@ pub const BufferView = struct {
 
     pub fn undo(v: *Self) !void {
         const e = v.history.undo() orelse return;
-        if (e.inserted.len > 0) try v.tree.delete(e.offset, @intCast(e.inserted.len));
-        if (e.removed.len > 0) try v.tree.insert(e.offset, e.removed);
-        v.version += 1;
+        try v.replace(e.offset, e.inserted, e.removed);
         v.cursor.offset = e.cursor_before;
         v.cursor.afterEdit(&v.tree);
     }
 
     pub fn redo(v: *Self) !void {
         const e = v.history.redo() orelse return;
-        if (e.removed.len > 0) try v.tree.delete(e.offset, @intCast(e.removed.len));
-        if (e.inserted.len > 0) try v.tree.insert(e.offset, e.inserted);
-        v.version += 1;
+        try v.replace(e.offset, e.removed, e.inserted);
         v.cursor.offset = e.cursor_after;
         v.cursor.afterEdit(&v.tree);
+    }
+
+    /// The one place the text changes: `old`, which is at `offset`, becomes
+    /// `new`, and everything derived from the text hears about it.
+    fn replace(v: *Self, offset: u32, old: []const u8, new: []const u8) !void {
+        const line = v.tree.positionAt(offset).line;
+        if (old.len > 0) try v.tree.delete(offset, @intCast(old.len));
+        if (new.len > 0) try v.tree.insert(offset, new);
+        v.version += 1;
+        v.rows.edited(
+            line,
+            @intCast(std.mem.count(u8, old, "\n")),
+            @intCast(std.mem.count(u8, new, "\n")),
+        );
     }
 
     /// Steps back over a whole character, so multi-byte text is not split.
@@ -545,6 +557,7 @@ pub const Buffer = struct {
             .path = path,
             .name = name,
             .language = language_mod.detect(name),
+            .rows = .{ .gpa = b.gpa },
         };
         try b.views.append(b.gpa, view);
         b.active = b.views.items.len - 1;
@@ -660,6 +673,7 @@ fn testView(text: []const u8) !BufferView {
         .gpa = gpa,
         .tree = try PieceTree.initFromBytes(gpa, text),
         .history = .{ .gpa = gpa },
+        .rows = .{ .gpa = gpa },
         .name = try gpa.dupe(u8, "test"),
     };
 }
