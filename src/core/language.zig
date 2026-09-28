@@ -16,6 +16,8 @@ pub const Language = struct {
     code: bool = true,
     /// The quote characters that pair up.
     quotes: []const u8 = "\"'",
+    /// The Tree-sitter grammar that highlights it, if one is built in.
+    grammar: ?[]const u8 = null,
 };
 
 pub const plain = Language{ .name = "Plain Text", .code = false, .quotes = "" };
@@ -24,22 +26,22 @@ const c_like = [2][]const u8{ "/*", "*/" };
 const markup = [2][]const u8{ "<!--", "-->" };
 
 pub const all = [_]Language{
-    .{ .name = "C", .extensions = &.{ "c", "h" }, .line_comment = "//", .block_comment = c_like },
+    .{ .name = "C", .extensions = &.{ "c", "h" }, .line_comment = "//", .block_comment = c_like, .grammar = "c" },
     .{ .name = "C++", .extensions = &.{ "cc", "cpp", "cxx", "hh", "hpp", "hxx", "ino" }, .line_comment = "//", .block_comment = c_like },
-    .{ .name = "Zig", .extensions = &.{ "zig", "zon" }, .line_comment = "//" },
-    .{ .name = "Rust", .extensions = &.{"rs"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"" },
-    .{ .name = "Go", .extensions = &.{"go"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`" },
-    .{ .name = "JavaScript", .extensions = &.{ "js", "mjs", "cjs", "jsx" }, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`" },
+    .{ .name = "Zig", .extensions = &.{ "zig", "zon" }, .line_comment = "//", .grammar = "zig" },
+    .{ .name = "Rust", .extensions = &.{"rs"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"", .grammar = "rust" },
+    .{ .name = "Go", .extensions = &.{"go"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`", .grammar = "go" },
+    .{ .name = "JavaScript", .extensions = &.{ "js", "mjs", "cjs", "jsx" }, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`", .grammar = "javascript" },
     .{ .name = "TypeScript", .extensions = &.{ "ts", "mts", "cts", "tsx" }, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`" },
-    .{ .name = "Java", .extensions = &.{"java"}, .line_comment = "//", .block_comment = c_like },
+    .{ .name = "Java", .extensions = &.{"java"}, .line_comment = "//", .block_comment = c_like, .grammar = "java" },
     .{ .name = "Kotlin", .extensions = &.{ "kt", "kts" }, .line_comment = "//", .block_comment = c_like },
     .{ .name = "C#", .extensions = &.{"cs"}, .line_comment = "//", .block_comment = c_like },
     .{ .name = "Swift", .extensions = &.{"swift"}, .line_comment = "//", .block_comment = c_like },
     .{ .name = "Dart", .extensions = &.{"dart"}, .line_comment = "//", .block_comment = c_like },
     .{ .name = "PHP", .extensions = &.{"php"}, .line_comment = "//", .block_comment = c_like },
-    .{ .name = "CSS", .extensions = &.{ "css", "scss", "less" }, .block_comment = c_like },
-    .{ .name = "JSON", .extensions = &.{ "json", "jsonc", "json5" }, .line_comment = "//", .quotes = "\"" },
-    .{ .name = "Python", .extensions = &.{ "py", "pyw", "pyi" }, .line_comment = "#" },
+    .{ .name = "CSS", .extensions = &.{ "css", "scss", "less" }, .block_comment = c_like, .grammar = "css" },
+    .{ .name = "JSON", .extensions = &.{ "json", "jsonc", "json5" }, .line_comment = "//", .quotes = "\"", .grammar = "json" },
+    .{ .name = "Python", .extensions = &.{ "py", "pyw", "pyi" }, .line_comment = "#", .grammar = "python" },
     .{ .name = "Ruby", .extensions = &.{"rb"}, .file_names = &.{ "Gemfile", "Rakefile" }, .line_comment = "#" },
     .{ .name = "Perl", .extensions = &.{ "pl", "pm" }, .line_comment = "#" },
     .{
@@ -48,10 +50,11 @@ pub const all = [_]Language{
         .file_names = &.{ ".bashrc", ".bash_profile", ".zshrc", ".profile" },
         .line_comment = "#",
         .quotes = "\"'`",
+        .grammar = "bash",
     },
     .{ .name = "PowerShell", .extensions = &.{ "ps1", "psm1" }, .line_comment = "#" },
-    .{ .name = "YAML", .extensions = &.{ "yml", "yaml" }, .line_comment = "#" },
-    .{ .name = "TOML", .extensions = &.{"toml"}, .line_comment = "#" },
+    .{ .name = "YAML", .extensions = &.{ "yml", "yaml" }, .line_comment = "#", .grammar = "yaml" },
+    .{ .name = "TOML", .extensions = &.{"toml"}, .line_comment = "#", .grammar = "toml" },
     .{ .name = "INI", .extensions = &.{ "ini", "cfg", "conf" }, .file_names = &.{ ".gitignore", ".gitattributes", ".editorconfig" }, .line_comment = "#" },
     .{ .name = "Makefile", .extensions = &.{"mk"}, .file_names = &.{ "Makefile", "makefile", "GNUmakefile" }, .line_comment = "#" },
     .{ .name = "Dockerfile", .extensions = &.{"dockerfile"}, .file_names = &.{"Dockerfile"}, .line_comment = "#" },
@@ -65,7 +68,7 @@ pub const all = [_]Language{
     .{ .name = "Lisp", .extensions = &.{ "lisp", "el", "clj", "cljs", "scm", "rkt" }, .line_comment = ";", .quotes = "\"" },
     .{ .name = "Erlang", .extensions = &.{ "erl", "hrl" }, .line_comment = "%" },
     .{ .name = "LaTeX", .extensions = &.{ "tex", "sty", "cls" }, .line_comment = "%", .quotes = "" },
-    .{ .name = "HTML", .extensions = &.{ "html", "htm", "xhtml", "vue", "svelte" }, .block_comment = markup },
+    .{ .name = "HTML", .extensions = &.{ "html", "htm", "xhtml", "vue", "svelte" }, .block_comment = markup, .grammar = "html" },
     .{ .name = "XML", .extensions = &.{ "xml", "svg", "xsd", "xsl", "plist" }, .block_comment = markup },
     .{ .name = "Markdown", .extensions = &.{ "md", "markdown" }, .block_comment = markup, .code = false, .quotes = "" },
 };

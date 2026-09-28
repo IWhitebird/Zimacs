@@ -82,6 +82,21 @@ pub fn offsetOf(line: []const u8, column: u32, tab_width: u8) u32 {
     return @intCast(line.len);
 }
 
+/// The character drawn over screen column `column`, which starts before it
+/// when it is a tab or a wide character. Past the end, the end of the line.
+pub fn characterAt(line: []const u8, column: u32, tab_width: u8) struct { offset: u32, column: u32 } {
+    var at: u32 = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        const ch = decode(line, i);
+        const advance = if (line[i] == '\t') tabAdvance(at, tab_width) else columnsFor(ch.code);
+        if (at + advance > column) break;
+        at += advance;
+        i += ch.len;
+    }
+    return .{ .offset = @intCast(i), .column = at };
+}
+
 /// Total columns `line` occupies.
 pub fn width(line: []const u8, tab_width: u8) u32 {
     return columnOf(line, line.len, tab_width);
@@ -103,7 +118,14 @@ pub fn fitStart(buf: []u8, line: []const u8, columns: u32) [:0]const u8 {
 /// Writes `line` with tabs turned into spaces, so what is drawn lines up with
 /// the columns everything else computes.
 pub fn expand(line: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator, tab_width: u8) !void {
-    var column: u32 = 0;
+    _ = try expandFrom(line, 0, out, gpa, tab_width);
+}
+
+/// `expand` for part of a line that starts at screen column `start_column`,
+/// so its tabs still reach the same stops as in the whole line. Returns the
+/// column it ends at.
+pub fn expandFrom(line: []const u8, start_column: u32, out: *std.ArrayList(u8), gpa: std.mem.Allocator, tab_width: u8) !u32 {
+    var column = start_column;
     var i: usize = 0;
     while (i < line.len) {
         if (line[i] == '\t') {
@@ -118,6 +140,7 @@ pub fn expand(line: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator,
         column += columnsFor(at.code);
         i += at.len;
     }
+    return column;
 }
 
 pub fn tabAdvance(column: u32, tab_width: u8) u32 {
@@ -200,6 +223,21 @@ test "offsetOf is the inverse of columnOf" {
     }
     try testing.expectEqual(@as(u32, 0), offsetOf(line, 0, 4));
     try testing.expectEqual(@as(u32, 1), offsetOf(line, 1, 4));
+}
+
+test "the character over a column can start before it" {
+    const line = "a\tb\u{1F600}c";
+    try testing.expectEqual(@as(u32, 0), characterAt(line, 0, 4).offset);
+    // The tab covers columns 1 to 3.
+    try testing.expectEqual(@as(u32, 1), characterAt(line, 2, 4).offset);
+    try testing.expectEqual(@as(u32, 1), characterAt(line, 2, 4).column);
+    try testing.expectEqual(@as(u32, 2), characterAt(line, 4, 4).offset);
+    // The emoji covers columns 5 and 6.
+    try testing.expectEqual(@as(u32, 3), characterAt(line, 6, 4).offset);
+    try testing.expectEqual(@as(u32, 5), characterAt(line, 6, 4).column);
+    try testing.expectEqual(@as(u32, 7), characterAt(line, 7, 4).offset);
+    try testing.expectEqual(@as(u32, line.len), characterAt(line, 99, 4).offset);
+    try testing.expectEqual(@as(u32, 8), characterAt(line, 99, 4).column);
 }
 
 test "expand turns tabs into spaces" {

@@ -30,6 +30,8 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/crash.zig", .raylib = false },
     .{ .path = "src/core/report.zig", .raylib = false },
     .{ .path = "src/core/brackets.zig", .raylib = false },
+    .{ .path = "src/core/regex.zig", .raylib = false },
+    .{ .path = "src/core/syntax.zig", .raylib = false },
     .{ .path = "src/core/comment.zig", .raylib = false },
     .{ .path = "src/core/typing.zig", .raylib = false },
     .{ .path = "src/core/language.zig", .raylib = false },
@@ -67,7 +69,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const app = App{ .raylib = raylib, .raygui = raygui, .raylib_lib = raylib_lib, .build_info = build_info };
+    const app = App{
+        .raylib = raylib,
+        .raygui = raygui,
+        .raylib_lib = raylib_lib,
+        .build_info = build_info,
+        .web = target.result.os.tag == .emscripten,
+    };
     app.addTo(b, exe_module);
 
     // Gives Zimacs.exe its icon in Explorer and the taskbar. Only Windows
@@ -123,7 +131,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        if (file.raylib) app.addTo(b, module) else addRootCerts(b, module);
+        if (file.raylib) app.addTo(b, module) else {
+            addRootCerts(b, module);
+            addSyntax(b, module, false);
+        }
         const tests = b.addTest(.{ .root_module = module });
         test_step.dependOn(&b.addRunArtifact(tests).step);
     }
@@ -135,6 +146,7 @@ const App = struct {
     raygui: *std.Build.Module,
     raylib_lib: *std.Build.Step.Compile,
     build_info: *std.Build.Step.Options,
+    web: bool,
 
     fn addTo(app: App, b: *std.Build, module: *std.Build.Module) void {
         module.addImport("raylib", app.raylib);
@@ -147,8 +159,71 @@ const App = struct {
         module.addAnonymousImport("icon_data", .{ .root_source_file = b.path("assets/logo/zimacs-64.png") });
         module.addAnonymousImport("welcome_data", .{ .root_source_file = b.path("assets/web/welcome.txt") });
         addRootCerts(b, module);
+        addSyntax(b, module, app.web);
     }
 };
+
+/// A Tree-sitter grammar built in, by the name `language.zig` gives it.
+const Grammar = struct {
+    name: []const u8,
+    package: []const u8,
+    /// Whether it has a hand-written scanner beside its generated parser.
+    scanner: bool,
+    /// Also built into the web demo, which shows a C file.
+    web: bool = false,
+};
+
+/// C++ and TypeScript are left out for now: their grammars are several
+/// megabytes each.
+const grammars = [_]Grammar{
+    .{ .name = "c", .package = "ts_c", .scanner = false, .web = true },
+    .{ .name = "zig", .package = "ts_zig", .scanner = false },
+    .{ .name = "json", .package = "ts_json", .scanner = false },
+    .{ .name = "python", .package = "ts_python", .scanner = true },
+    .{ .name = "javascript", .package = "ts_javascript", .scanner = true },
+    .{ .name = "rust", .package = "ts_rust", .scanner = true },
+    .{ .name = "go", .package = "ts_go", .scanner = false },
+    .{ .name = "java", .package = "ts_java", .scanner = false },
+    .{ .name = "bash", .package = "ts_bash", .scanner = true },
+    .{ .name = "html", .package = "ts_html", .scanner = true },
+    .{ .name = "css", .package = "ts_css", .scanner = true },
+    .{ .name = "toml", .package = "ts_toml", .scanner = true },
+    .{ .name = "yaml", .package = "ts_yaml", .scanner = true },
+};
+
+/// Tree-sitter and the grammars, compiled into `module`, with each
+/// grammar's highlight query embedded and their names in `grammars`.
+fn addSyntax(b: *std.Build, module: *std.Build.Module, web: bool) void {
+    // Scanners commonly define `create()` with empty parentheses, which C
+    // types differently from the `create(void)` pointer Tree-sitter calls
+    // it through. The same at the machine level, but the function-type
+    // check would trap on it.
+    const c_flags = [_][]const u8{ "-std=c11", "-fno-sanitize=function" };
+    // Emscripten supplies libc to the web build itself.
+    if (!web) module.link_libc = true;
+    const core = b.dependency("tree_sitter", .{});
+    module.addIncludePath(core.path("lib/include"));
+    module.addIncludePath(core.path("lib/src"));
+    module.addCSourceFile(.{
+        .file = core.path("lib/src/lib.c"),
+        .flags = &(c_flags ++ [_][]const u8{ "-D_POSIX_C_SOURCE=200112L", "-D_DEFAULT_SOURCE" }),
+    });
+
+    var names: std.ArrayList([]const u8) = .empty;
+    for (grammars) |g| {
+        if (web and !g.web) continue;
+        const dep = b.dependency(g.package, .{});
+        module.addCSourceFile(.{ .file = dep.path("src/parser.c"), .flags = &c_flags });
+        if (g.scanner) module.addCSourceFile(.{ .file = dep.path("src/scanner.c"), .flags = &c_flags });
+        module.addAnonymousImport(b.fmt("highlights_{s}", .{g.name}), .{
+            .root_source_file = dep.path("queries/highlights.scm"),
+        });
+        names.append(b.allocator, g.name) catch @panic("OOM");
+    }
+    const options = b.addOptions();
+    options.addOption([]const []const u8, "names", names.items);
+    module.addOptions("grammars", options);
+}
 
 /// The certificates `src/core/https.zig` trusts on top of the system's.
 fn addRootCerts(b: *std.Build, module: *std.Build.Module) void {

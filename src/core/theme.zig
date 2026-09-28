@@ -28,6 +28,17 @@ pub const Theme = struct {
     close_hover_text: pen.Color,
     find_match: pen.Color,
     bracket_match: pen.Color,
+    syntax_keyword: pen.Color,
+    syntax_string: pen.Color,
+    syntax_escape: pen.Color,
+    syntax_comment: pen.Color,
+    syntax_number: pen.Color,
+    syntax_constant: pen.Color,
+    syntax_function: pen.Color,
+    syntax_type: pen.Color,
+    syntax_property: pen.Color,
+    syntax_tag: pen.Color,
+    syntax_builtin: pen.Color,
     warning: pen.Color,
 };
 

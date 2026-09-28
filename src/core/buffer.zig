@@ -17,6 +17,8 @@ const History = @import("history.zig").History;
 const text_mod = @import("text.zig");
 const language_mod = @import("language.zig");
 const wrap = @import("wrap.zig");
+const syntax_mod = @import("syntax.zig");
+const Syntax = syntax_mod.Syntax;
 const Language = language_mod.Language;
 const textfile = @import("textfile.zig");
 pub const Format = textfile.Format;
@@ -61,6 +63,8 @@ pub const BufferView = struct {
     language: *const Language = &language_mod.plain,
     /// How many screen rows each line takes when lines are folded.
     rows: wrap.Rows,
+    /// Highlighting, for a language with a built-in grammar.
+    syntax: ?*Syntax = null,
     /// The file as last read or written, to notice changes made elsewhere.
     disk: ?Stamp = null,
 
@@ -86,6 +90,7 @@ pub const BufferView = struct {
         v.tree.deinit();
         v.history.deinit();
         v.rows.deinit();
+        if (v.syntax) |s| s.destroy();
         if (v.path) |p| v.gpa.free(p);
         v.gpa.free(v.name);
     }
@@ -363,15 +368,36 @@ pub const BufferView = struct {
     /// The one place the text changes: `old`, which is at `offset`, becomes
     /// `new`, and everything derived from the text hears about it.
     fn replace(v: *Self, offset: u32, old: []const u8, new: []const u8) !void {
-        const line = v.tree.positionAt(offset).line;
-        if (old.len > 0) try v.tree.delete(offset, @intCast(old.len));
+        const old_len: u32 = @intCast(old.len);
+        const new_len: u32 = @intCast(new.len);
+        const start = v.tree.positionAt(offset);
+        const old_end = v.tree.positionAt(offset + old_len);
+        if (old.len > 0) try v.tree.delete(offset, old_len);
         if (new.len > 0) try v.tree.insert(offset, new);
         v.version += 1;
         v.rows.edited(
-            line,
+            start.line,
             @intCast(std.mem.count(u8, old, "\n")),
             @intCast(std.mem.count(u8, new, "\n")),
         );
+        if (v.syntax) |s| {
+            const new_end = v.tree.positionAt(offset + new_len);
+            s.edited(.{
+                .start_byte = offset,
+                .old_end_byte = offset + old_len,
+                .new_end_byte = offset + new_len,
+                .start_point = .{ .row = start.line, .column = start.column },
+                .old_end_point = .{ .row = old_end.line, .column = old_end.column },
+                .new_end_point = .{ .row = new_end.line, .column = new_end.column },
+            });
+        }
+    }
+
+    /// Picks the language again from the name, and a highlighter for it.
+    fn setLanguage(v: *Self) void {
+        v.language = language_mod.detect(v.name);
+        if (v.syntax) |s| s.destroy();
+        v.syntax = if (v.tree.len() <= syntax_mod.max_bytes) Syntax.create(v.gpa, v.language) else null;
     }
 
     /// Steps back over a whole character, so multi-byte text is not split.
@@ -556,9 +582,9 @@ pub const Buffer = struct {
             .history = .{ .gpa = b.gpa },
             .path = path,
             .name = name,
-            .language = language_mod.detect(name),
             .rows = .{ .gpa = b.gpa },
         };
+        view.setLanguage();
         try b.views.append(b.gpa, view);
         b.active = b.views.items.len - 1;
         return view;
@@ -616,7 +642,7 @@ pub const Buffer = struct {
         b.gpa.free(view.name);
         view.path = owned_path;
         view.name = name;
-        view.language = language_mod.detect(name);
+        view.setLanguage();
         return b.save(view);
     }
 };

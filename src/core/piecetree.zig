@@ -273,6 +273,28 @@ pub const PieceTree = struct {
         return null;
     }
 
+    /// The text from `offset` to the end of the piece holding it: as much as
+    /// can be read without copying. Empty past the end.
+    pub fn chunkAt(t: *const Self, offset: u32) []const u8 {
+        if (offset >= t.total_len) return "";
+        var node = t.root;
+        var left = offset;
+        while (node != nil) {
+            const n = t.at(node);
+            if (n.left_len > left) {
+                node = n.left;
+            } else if (n.left_len + n.piece.len > left) {
+                const buf = &t.bufs.items[n.piece.buf];
+                const start = buf.offsetOf(n.piece.start) + left - n.left_len;
+                return buf.bytes.items[start .. buf.offsetOf(n.piece.start) + n.piece.len];
+            } else {
+                left -= n.left_len + n.piece.len;
+                node = n.right;
+            }
+        }
+        return "";
+    }
+
     /// The whole document as a new slice. Caller frees it.
     pub fn allocText(t: *const Self, gpa: Allocator) ![]u8 {
         var out: std.ArrayList(u8) = .empty;
@@ -1125,4 +1147,24 @@ test "fuzz against reference" {
 test "fuzz with long op sequences" {
     try fuzz(0xC0FFEE, 400);
     try fuzz(0xDEADBEEF, 400);
+}
+
+test "reading chunk by chunk gives back the whole text" {
+    const gpa = testing.allocator;
+    var tree = try PieceTree.initFromBytes(gpa, "hello world");
+    defer tree.deinit();
+    try tree.insert(5, ",");
+    try tree.insert(0, ">> ");
+
+    var joined: std.ArrayList(u8) = .empty;
+    defer joined.deinit(gpa);
+    var at: u32 = 0;
+    while (at < tree.len()) {
+        const chunk = tree.chunkAt(at);
+        try testing.expect(chunk.len > 0);
+        try joined.appendSlice(gpa, chunk);
+        at += @intCast(chunk.len);
+    }
+    try testing.expectEqualStrings(">> hello, world", joined.items);
+    try testing.expectEqualStrings("", tree.chunkAt(tree.len()));
 }

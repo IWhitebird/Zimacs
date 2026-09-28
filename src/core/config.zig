@@ -32,6 +32,17 @@ pub const Colors = struct {
     close_hover_text: u24 = 0xFFFFFF,
     find_match: u24 = 0x5C3F12,
     bracket_match: u24 = 0x3B4252,
+    syntax_keyword: u24 = 0xC586C0,
+    syntax_string: u24 = 0xCE9178,
+    syntax_escape: u24 = 0xD7BA7D,
+    syntax_comment: u24 = 0x6A9955,
+    syntax_number: u24 = 0xB5CEA8,
+    syntax_constant: u24 = 0x4FC1FF,
+    syntax_function: u24 = 0xDCDCAA,
+    syntax_type: u24 = 0x4EC9B0,
+    syntax_property: u24 = 0x9CDCFE,
+    syntax_tag: u24 = 0x569CD6,
+    syntax_builtin: u24 = 0x569CD6,
     warning: u24 = 0xE5A94B,
 
     /// Sets the field named `key`, if there is one.

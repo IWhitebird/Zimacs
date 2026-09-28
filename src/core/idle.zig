@@ -32,9 +32,14 @@ pub fn pace() void {
 }
 
 /// Frames also run back to back while a button is held, since a drag held
-/// still past the edge of the text scrolls without sending events.
+/// still past the edge of the text scrolls without sending events, and
+/// while a file is still being parsed.
 fn busy() bool {
-    return pen.isMouseButtonDown(.left) or pen.isMouseButtonDown(.right) or pen.isMouseButtonDown(.middle);
+    if (pen.isMouseButtonDown(.left) or pen.isMouseButtonDown(.right) or pen.isMouseButtonDown(.middle)) return true;
+    // Parsing runs a slice per frame until it catches up with the text.
+    const view = app.buffer.current() orelse return false;
+    const s = view.syntax orelse return false;
+    return s.stale;
 }
 
 fn hadInput() bool {

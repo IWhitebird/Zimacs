@@ -27,6 +27,7 @@ const Metrics = @import("font.zig").Metrics;
 const Layout = layout.Layout;
 const Range = @import("cursor.zig").Range;
 const brackets = @import("brackets.zig");
+const syntax = @import("syntax.zig");
 
 pub const Editor = struct {
     /// One line as stored, then the same line with tabs expanded.
@@ -41,6 +42,8 @@ pub const Editor = struct {
     matches: std.ArrayList(search.Match) = .empty,
     /// Where the rows of the line being drawn start, while lines are folded.
     starts: std.ArrayList(u32) = .empty,
+    /// What each byte of the row being drawn is, for its colour.
+    kinds: std.ArrayList(syntax.Kind) = .empty,
     /// The brackets marked around the caret, looked for again only when the
     /// caret or the text changes.
     bracket_pair: ?brackets.Pair = null,
@@ -74,6 +77,7 @@ pub const Editor = struct {
         e.row_lines.deinit(app.gpa);
         e.matches.deinit(app.gpa);
         e.starts.deinit(app.gpa);
+        e.kinds.deinit(app.gpa);
         e.tab_widths.deinit(app.gpa);
     }
 
@@ -215,11 +219,13 @@ pub const Editor = struct {
         const tab = app.config.tab_width;
         const wrapping = app.config.wrap_lines;
         const fold = foldFor(l, cell);
-        const shift = if (wrapping) 0 else @as(f32, @floatFromInt(view.left_column)) * cell.width;
 
         e.row_lines.clearRetainingCapacity();
         try e.collectMatches(view, rows);
         const pair = if (selection == null) e.bracketsAround(view) else null;
+        // Another slice of parsing, if the tree is behind the text.
+        if (view.syntax) |s| _ = s.step(&view.tree);
+        const visible = visibleColumns(l, cell);
 
         var widest: u32 = 1;
         var row: u32 = 0;
@@ -265,22 +271,59 @@ pub const Editor = struct {
                 };
                 if (e.raw.items.len == 0) continue;
 
-                // Only the slice of the line this row shows.
-                const first = text.offsetOf(e.raw.items, from, tab);
-                const last = text.offsetOf(e.raw.items, to, tab);
-                e.shown.clearRetainingCapacity();
-                try text.expand(e.raw.items[first..last], &e.shown, app.gpa, tab);
-                app.font.draw(
-                    try terminate(&e.shown),
-                    l.text.x + layout.padding - shift,
-                    y,
-                    theme.current.text,
-                );
+                // Only the part of the line this row shows. Unfolded, that
+                // is the columns scrolled into view.
+                const origin = if (wrapping) from else view.left_column;
+                const first = text.characterAt(e.raw.items, origin, tab);
+                const last = text.offsetOf(e.raw.items, if (wrapping) to else @min(to, origin + visible + 1), tab);
+                try e.drawRowText(view, line, first.offset, last, first.column, origin, l.text.x + layout.padding, y, cell);
             }
         }
         view.content_columns = widest;
 
         try e.drawCaret(view, l, cell);
+    }
+
+    /// Draws bytes `first` to `last` of `line`, held in `e.raw`, which start
+    /// at screen column `column`, coloured by the view's highlighting.
+    /// `origin` is the column that sits at `x`.
+    fn drawRowText(
+        e: *Self,
+        view: *BufferView,
+        line: u32,
+        first: u32,
+        last: u32,
+        column: u32,
+        origin: u32,
+        x: f32,
+        y: f32,
+        cell: Metrics,
+    ) !void {
+        const len = last - first;
+        e.kinds.clearRetainingCapacity();
+        try e.kinds.appendNTimes(app.gpa, .none, len);
+        const row_start = view.tree.lineStart(line) + first;
+        const row_end = row_start + len;
+        const spans = if (view.syntax) |s| s.highlights(&view.tree, row_start, row_end) else &.{};
+        for (spans) |sp| {
+            if (sp.start >= row_end) break;
+            if (sp.end <= row_start) continue;
+            @memset(e.kinds.items[@max(sp.start, row_start) - row_start .. @min(sp.end, row_end) - row_start], sp.kind);
+        }
+
+        var at: u32 = 0;
+        var col = column;
+        while (at < len) {
+            const kind = e.kinds.items[at];
+            var end = at + 1;
+            while (end < len and e.kinds.items[end] == kind) end += 1;
+            e.shown.clearRetainingCapacity();
+            const next = try text.expandFrom(e.raw.items[first + at .. first + end], col, &e.shown, app.gpa, app.config.tab_width);
+            const left = x + (@as(f32, @floatFromInt(col)) - @as(f32, @floatFromInt(origin))) * cell.width;
+            app.font.draw(try terminate(&e.shown), left, y, syntaxColour(kind));
+            col = next;
+            at = end;
+        }
     }
 
     fn bracketsAround(e: *Self, view: *const BufferView) ?brackets.Pair {
@@ -1034,6 +1077,24 @@ pub fn promptRowAt(point: pen.Vector2, l: Layout, cell: Metrics) ?usize {
 pub fn currentLayout() Layout {
     const lines = if (app.buffer.current()) |v| v.tree.lineCount() else 1;
     return Layout.compute(app.font.metrics, lines, app.buffer.views.items.len > 0, app.window.custom_frame);
+}
+
+fn syntaxColour(kind: syntax.Kind) pen.Color {
+    const t = theme.current;
+    return switch (kind) {
+        .none => t.text,
+        .keyword => t.syntax_keyword,
+        .string => t.syntax_string,
+        .escape => t.syntax_escape,
+        .comment => t.syntax_comment,
+        .number => t.syntax_number,
+        .constant => t.syntax_constant,
+        .function => t.syntax_function,
+        .type => t.syntax_type,
+        .property => t.syntax_property,
+        .tag => t.syntax_tag,
+        .builtin => t.syntax_builtin,
+    };
 }
 
 /// How lines fold in this layout.
