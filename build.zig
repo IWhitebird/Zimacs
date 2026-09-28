@@ -32,6 +32,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/brackets.zig", .raylib = false },
     .{ .path = "src/core/regex.zig", .raylib = false },
     .{ .path = "src/core/interval.zig", .raylib = false },
+    .{ .path = "src/core/safewrite.zig", .raylib = false },
     .{ .path = "src/core/syntax.zig", .raylib = false },
     .{ .path = "src/core/comment.zig", .raylib = false },
     .{ .path = "src/core/typing.zig", .raylib = false },
@@ -198,11 +199,11 @@ const grammars = [_]Grammar{
 /// Tree-sitter and the grammars, compiled into `module`, with each
 /// grammar's highlight query embedded and their names in `grammars`.
 fn addSyntax(b: *std.Build, module: *std.Build.Module, web: bool) void {
-    // Scanners commonly define `create()` with empty parentheses, which C
-    // types differently from the `create(void)` pointer Tree-sitter calls
-    // it through. The same at the machine level, but the function-type
-    // check would trap on it.
-    const c_flags = [_][]const u8{ "-std=c11", "-fno-sanitize=function" };
+    // Without the undefined-behaviour checks safe builds give C, as
+    // upstream builds it: they cost a quarter of the parsing time, and the
+    // function-type one traps on the `create()` scanners commonly define,
+    // which C types differently from the `create(void)` it is called as.
+    const c_flags = [_][]const u8{ "-std=c11", "-fno-sanitize=undefined" };
     // Emscripten supplies libc to the web build itself.
     if (!web) module.link_libc = true;
     const core = b.dependency("tree_sitter", .{});

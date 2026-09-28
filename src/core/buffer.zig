@@ -22,6 +22,7 @@ const syntax_mod = @import("syntax.zig");
 const Syntax = syntax_mod.Syntax;
 const Language = language_mod.Language;
 const textfile = @import("textfile.zig");
+const safewrite = @import("safewrite.zig");
 pub const Format = textfile.Format;
 
 /// The largest file Zimacs opens, and so the most one tab can hold. Piece
@@ -649,7 +650,7 @@ pub const Buffer = struct {
         };
         defer b.gpa.free(bytes);
 
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+        try safewrite.write(io, path, bytes);
         view.markSaved();
         view.disk = stampOf(io, path);
         return outcome;

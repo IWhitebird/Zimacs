@@ -15,6 +15,7 @@ const Format = buffer_mod.Format;
 const Stamp = buffer_mod.Stamp;
 const textfile = @import("textfile.zig");
 const Interval = @import("interval.zig").Interval;
+const safewrite = @import("safewrite.zig");
 
 pub const dir_name = "session";
 
@@ -108,10 +109,10 @@ pub fn save(b: *Buffer, extras: Extras, io: std.Io, gpa: Allocator, dir: []const
         defer gpa.free(text);
 
         var name_buf: [max_text_name]u8 = undefined;
-        try writeAtomic(open, io, try textName(&name_buf, mark, i), text);
+        try safewrite.replaceIn(open, io, try textName(&name_buf, mark, i), text, null);
     }
 
-    try writeAtomic(open, io, index_name, index.items);
+    try safewrite.replaceIn(open, io, index_name, index.items, null);
     removeOtherTexts(open, io, mark);
 }
 
@@ -337,14 +338,6 @@ fn place(view: *BufferView, entry: Entry) void {
     view.followed = view.cursor.offset;
 }
 
-fn writeAtomic(dir: std.Io.Dir, io: std.Io, name: []const u8, data: []const u8) !void {
-    var tmp_buf: [64]u8 = undefined;
-    const tmp = try std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name});
-    try dir.writeFile(io, .{ .sub_path = tmp, .data = data });
-    errdefer dir.deleteFile(io, tmp) catch {};
-    try dir.rename(tmp, dir, name, io);
-}
-
 /// Field by field, so padding bytes, which hold nothing in particular,
 /// cannot make an unchanged session look changed.
 fn hashValue(h: *std.hash.Wyhash, value: anytype) void {
@@ -538,7 +531,7 @@ test "saving leaves no temporary files behind" {
     defer dir.close(testing.io);
     var it = dir.iterate();
     while (try it.next(testing.io)) |item| {
-        try testing.expect(!std.mem.endsWith(u8, item.name, ".tmp"));
+        try testing.expect(!std.mem.endsWith(u8, item.name, safewrite.temp_suffix));
     }
 }
 
