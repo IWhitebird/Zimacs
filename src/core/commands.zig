@@ -256,12 +256,26 @@ pub fn saveInBrowser(typed: []const u8) !void {
     saveViewAs(view, full);
 }
 
+const desktop_only = "Folders need the desktop version of Zimacs";
+
+/// Whether a folder is open, saying how to open one when it is not.
+fn folderOpen() bool {
+    if (app.io == null) {
+        tell(.info, desktop_only, .{});
+        return false;
+    }
+    if (app.workspace.root == null) {
+        tell(.info, "Open a folder first: File > Open Folder", .{});
+        return false;
+    }
+    return true;
+}
+
 /// Picks one of the folder's files by a few letters of its path. The folder
 /// is listed again each time, and the list swaps in once that is done.
 fn quickOpen() !void {
-    const io = app.io orelse return;
-    if (app.workspace.root == null) return tell(.info, "Open a folder first: File > Open Folder", .{});
-    app.workspace.refresh(io);
+    if (!folderOpen()) return;
+    app.workspace.refresh(app.io.?);
     try app.prompt.beginWith(.quick_open, app.workspace.files());
 }
 
@@ -279,7 +293,7 @@ pub fn folderListed() void {
 /// Searches every file of the folder, again as the query is typed. Opens
 /// on the last query and its hits.
 fn searchFolder() !void {
-    if (app.workspace.root == null) return tell(.info, "Open a folder first: File > Open Folder", .{});
+    if (!folderOpen()) return;
     try app.prompt.begin(.search_folder, app.folder_search.query.items);
     try app.prompt.replaceOptions(app.folder_search.labels());
 }
@@ -336,7 +350,7 @@ pub fn openInFolder(relative: []const u8) void {
 }
 
 fn toggleSidebar() void {
-    if (app.workspace.root == null) return tell(.info, "Open a folder first: File > Open Folder", .{});
+    if (!folderOpen()) return;
     app.sidebar.shown = !app.sidebar.shown;
     app.refreshSidebar();
 }
@@ -344,7 +358,7 @@ fn toggleSidebar() void {
 /// Asks for a folder to open as the project, in the system's dialog or else
 /// by typing its path.
 fn chooseFolder() !void {
-    const io = app.io orelse return;
+    const io = app.io orelse return tell(.info, desktop_only, .{});
     const start = app.workspace.root orelse ".";
     switch (app.file_dialog.show(app.gpa, io, .{ .kind = .folder, .dir = start })) {
         .shown => {},
