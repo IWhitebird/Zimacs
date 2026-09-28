@@ -39,6 +39,7 @@ pub const Window = @import("core/window.zig").Window;
 pub const Find = @import("core/find.zig").Find;
 pub const Dialog = @import("core/dialog.zig").Dialog;
 pub const Notice = @import("core/notice.zig").Notice;
+pub const FileDialog = @import("core/filedialog.zig").Dialog;
 
 const leak_checks = builtin.mode == .Debug;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -89,6 +90,7 @@ pub var update = Update{};
 pub var find = Find{};
 pub var dialog = Dialog{};
 pub var notice = Notice{};
+pub var file_dialog = FileDialog{};
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
@@ -162,6 +164,7 @@ pub fn run(start: Start) !void {
     }
     if (crashed_last_time) commands.tell(.problem, "Zimacs crashed last time. Help > Report a Problem sends the details.", .{});
 
+    if (io) |active_io| if (start.env) |env| file_dialog.setUp(active_io, env);
     commands.removeUpdateLeftovers();
     if (io) |active_io| idle.start(active_io);
     defer idle.stop();
@@ -178,6 +181,7 @@ pub fn run(start: Start) !void {
         if (session_dir) |d| if (autosave.due(pen.getTime(), &buffer, currentExtras())) saveSession(d);
         if (disk_watch.due(pen.getTime())) commands.checkDisk();
         if (update_schedule.due(pen.getTime(), &update)) commands.updateInBackground();
+        if (file_dialog.take()) |outcome| commands.finishFileDialog(outcome);
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
         // Before drawing too: the atlas cannot change under a frame using it.

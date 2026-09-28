@@ -32,6 +32,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/menu.zig", .raylib = true },
     .{ .path = "src/core/titlebar.zig", .raylib = true },
     .{ .path = "src/core/native.zig", .raylib = true },
+    .{ .path = "src/core/filedialog.zig", .raylib = true },
     .{ .path = "src/core/find.zig", .raylib = true },
     .{ .path = "src/core/dialog.zig", .raylib = true },
     .{ .path = "src/core/theme.zig", .raylib = true },

@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 const crash = @import("crash.zig");
 const report_mod = @import("report.zig");
 const system = @import("system.zig");
+const filedialog = @import("filedialog.zig");
 const updatelog = @import("updatelog.zig");
 
 pub fn run(action: Action) !void {
@@ -106,6 +107,34 @@ fn announceSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
     }
 }
 
+// ------------------------------------------------------- file dialogs
+
+/// The tab a system Save As dialog is choosing a name for.
+var saving: ?*BufferView = null;
+
+/// Acts on what a system file dialog chose, once it has closed.
+pub fn finishFileDialog(outcome: filedialog.Outcome) void {
+    const path = outcome.path orelse {
+        // A cancelled Save As leaves a tab that was closing open.
+        if (outcome.kind == .save) {
+            if (closing_after_save == saving) closing_after_save = null;
+            saving = null;
+        }
+        return;
+    };
+    defer app.gpa.free(path);
+    switch (outcome.kind) {
+        .open => app.openFile(path) catch |err| report("Could not open", err),
+        .save => {
+            const view = saving orelse return;
+            saving = null;
+            // The tab may have been closed while the dialog was up.
+            if (app.buffer.indexOf(view) == null) return;
+            saveViewAs(view, path);
+        },
+    }
+}
+
 // ------------------------------------------------------------ closing
 
 /// A tab waiting on Save As before it can close.
@@ -170,6 +199,11 @@ pub fn browseToSave() !void {
     const io = app.io orelse return app.prompt.begin(.save_as, view.path orelse "");
 
     const start = if (view.path) |p| std.fs.path.dirname(p) orelse "." else ".";
+    const name = if (view.path != null) std.fs.path.basename(view.name) else "";
+    if (app.file_dialog.show(app.gpa, io, .{ .kind = .save, .dir = start, .name = name })) {
+        saving = view;
+        return;
+    }
     app.browser.show(io, start, app.config.show_hidden) catch |err| {
         report("Could not read directory", err);
         return app.prompt.begin(.save_as, "");
@@ -210,6 +244,9 @@ pub fn browse(at: ?[]const u8) !void {
         const path = view.path orelse break :blk ".";
         break :blk std.fs.path.dirname(path) orelse ".";
     };
+    // The system's dialog when there is one; stepping between directories
+    // of the built-in browser stays in it.
+    if (at == null and app.file_dialog.show(app.gpa, io, .{ .kind = .open, .dir = start })) return;
 
     app.browser.show(io, start, app.config.show_hidden) catch |err| {
         report("Could not read directory", err);
