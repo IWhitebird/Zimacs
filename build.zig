@@ -213,6 +213,11 @@ const grammars = [_]Grammar{
     .{ .name = "css", .scanner = true },
     .{ .name = "toml", .scanner = true, .overrides = true },
     .{ .name = "yaml", .scanner = true, .overrides = true },
+    .{ .name = "xml", .dir = "xml", .scanner = true, .queries = &.{.{ .path = "queries/xml/highlights.scm" }} },
+    .{ .name = "make", .scanner = false, .overrides = true },
+    .{ .name = "dockerfile", .scanner = true },
+    .{ .name = "markdown", .dir = "tree-sitter-markdown", .scanner = true, .queries = &.{.{ .path = "tree-sitter-markdown/queries/highlights.scm" }} },
+    .{ .name = "markdown_inline", .package = "markdown", .dir = "tree-sitter-markdown-inline", .scanner = true, .queries = &.{.{ .path = "tree-sitter-markdown-inline/queries/highlights.scm" }} },
 };
 
 /// Tree-sitter and the grammars, compiled into `module`, with each

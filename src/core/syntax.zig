@@ -92,64 +92,61 @@ const Predicate = struct {
 /// The web build's allocator is libc's, since emscripten owns its heap.
 var compiled_arena = std.heap.ArenaAllocator.init(if (web.on_web) std.heap.c_allocator else std.heap.page_allocator);
 
-fn grammarIndex(lang: *const Language) ?usize {
-    const wanted = lang.grammar orelse return null;
-    for (grammars, 0..) |g, i| if (std.mem.eql(u8, g.name, wanted)) return i;
+/// Grammars that leave part of the text to another. Markdown's block
+/// grammar hands the text of its paragraphs and headings, its `inline`
+/// nodes, to an inline one, which finds emphasis, code and links.
+const nested = [_]struct { outer: []const u8, inner: []const u8, nodes: []const u8 }{
+    .{ .outer = "markdown", .inner = "markdown_inline", .nodes = "(inline) @inline" },
+};
+
+fn grammarNamed(name: []const u8) ?usize {
+    for (grammars, 0..) |g, i| if (eql(g.name, name)) return i;
     return null;
 }
 
 pub const Syntax = struct {
     gpa: std.mem.Allocator,
-    query: *const Compiled,
-    parser: *ts.Parser,
+    outer: Layer,
+    inner: ?Inner = null,
     cursor: *ts.QueryCursor,
-    tree: ?*ts.Tree = null,
-    /// The text has changed since the tree last matched it.
+    /// Some layer has not caught up with the text yet.
     stale: bool = true,
-    /// A parse stopped partway and the next `step` carries it on.
-    resuming: bool = false,
     spans: std.ArrayList(Span) = .empty,
-    /// The nodes one `highlights` call has coloured, by start and end, to
-    /// their place in `spans`.
+    /// The nodes of one layer already coloured, by start and end, to their
+    /// place in `spans`.
     seen: std.AutoHashMapUnmanaged(u64, u32) = .empty,
 
     /// Null for a language no built-in grammar covers.
     pub fn create(gpa: std.mem.Allocator, lang: *const Language) ?*Syntax {
-        const index = grammarIndex(lang) orelse return null;
-        const q = query(index) orelse return null;
-        const parser = ts.ts_parser_new() orelse return null;
-        if (!ts.ts_parser_set_language(parser, grammars[index].language())) {
-            ts.ts_parser_delete(parser);
-            return null;
-        }
-        const cursor = ts.ts_query_cursor_new() orelse {
-            ts.ts_parser_delete(parser);
-            return null;
-        };
-        const s = gpa.create(Syntax) catch {
-            ts.ts_query_cursor_delete(cursor);
-            ts.ts_parser_delete(parser);
-            return null;
-        };
-        s.* = .{ .gpa = gpa, .query = q, .parser = parser, .cursor = cursor };
+        const index = grammarNamed(lang.grammar orelse return null) orelse return null;
+        return init(gpa, index) catch null;
+    }
+
+    fn init(gpa: std.mem.Allocator, index: usize) !*Syntax {
+        var outer = try Layer.init(index);
+        errdefer outer.deinit();
+        const cursor = ts.ts_query_cursor_new() orelse return error.OutOfMemory;
+        errdefer ts.ts_query_cursor_delete(cursor);
+        var inner = try Inner.init(index);
+        errdefer if (inner) |*i| i.deinit(gpa);
+        const s = try gpa.create(Syntax);
+        s.* = .{ .gpa = gpa, .outer = outer, .inner = inner, .cursor = cursor };
         return s;
     }
 
     pub fn destroy(s: *Syntax) void {
-        if (s.tree) |t| ts.ts_tree_delete(t);
+        s.outer.deinit();
+        if (s.inner) |*i| i.deinit(s.gpa);
         ts.ts_query_cursor_delete(s.cursor);
-        ts.ts_parser_delete(s.parser);
         s.spans.deinit(s.gpa);
         s.seen.deinit(s.gpa);
         s.gpa.destroy(s);
     }
 
-    /// Tells the tree about an edit, so the next parse can reuse the rest.
+    /// Tells the trees about an edit, so the next parse can reuse the rest.
     pub fn edited(s: *Syntax, edit: ts.InputEdit) void {
-        if (s.tree) |t| ts.ts_tree_edit(t, &edit);
-        // A paused parse was of the old text.
-        if (s.resuming) ts.ts_parser_reset(s.parser);
-        s.resuming = false;
+        s.outer.edited(&edit);
+        if (s.inner) |*i| i.layer.edited(&edit);
         s.stale = true;
     }
 
@@ -158,16 +155,14 @@ pub const Syntax = struct {
     pub fn step(s: *Syntax, text: *const PieceTree) void {
         if (!s.stale) return;
         var progress = Progress{};
-        const input = ts.Input{ .payload = @ptrCast(@constCast(text)), .read = read };
-        const options = ts.ParseOptions{ .payload = &progress, .progress_callback = Progress.check };
-        const parsed = ts.ts_parser_parse_with_options(s.parser, s.tree, input, options) orelse {
-            s.resuming = true;
-            return;
-        };
-        if (s.tree) |old| ts.ts_tree_delete(old);
-        s.tree = parsed;
-        s.stale = false;
-        s.resuming = false;
+        if (s.outer.stale) s.outer.step(text, &progress);
+        s.stale = s.outer.stale;
+        const inner = if (s.inner) |*i| i else return;
+        // Where its text lies is known once the outer parse is done.
+        if (s.outer.stale or !inner.layer.stale) return;
+        if (!inner.layer.resuming) inner.findRanges(s.gpa, s.cursor, s.outer.tree.?) catch return;
+        inner.layer.step(text, &progress);
+        s.stale = inner.layer.stale;
     }
 
     /// The coloured spans between two byte offsets, in document order: a
@@ -175,9 +170,20 @@ pub const Syntax = struct {
     /// the innermost on top. Valid until the next call.
     pub fn highlights(s: *Syntax, text: *const PieceTree, start: u32, end: u32) []const Span {
         s.spans.clearRetainingCapacity();
+        s.collect(&s.outer, text, start, end);
+        // After the outer layer's, so where both colour the same text the
+        // inner one's sorts later and is drawn on top.
+        if (s.inner) |*i| s.collect(&i.layer, text, start, end);
+        // Captures come by start, then by pattern, so a node that starts
+        // where its parent does can come first; outer ones go first.
+        std.mem.sort(Span, s.spans.items, {}, outerFirst);
+        return s.spans.items;
+    }
+
+    fn collect(s: *Syntax, layer: *const Layer, text: *const PieceTree, start: u32, end: u32) void {
         s.seen.clearRetainingCapacity();
-        const tree = s.tree orelse return s.spans.items;
-        const q = s.query;
+        const tree = layer.tree orelse return;
+        const q = layer.query;
 
         _ = ts.ts_query_cursor_set_byte_range(s.cursor, start, end);
         ts.ts_query_cursor_exec(s.cursor, q.query, ts.ts_tree_root_node(tree));
@@ -200,12 +206,106 @@ pub const Syntax = struct {
                 continue;
             }
             s.seen.put(s.gpa, node_key, @intCast(s.spans.items.len)) catch continue;
-            s.spans.append(s.gpa, .{ .start = from, .end = to, .kind = kind }) catch break;
+            s.spans.append(s.gpa, .{ .start = from, .end = to, .kind = kind }) catch return;
         }
-        // Captures come by start, then by pattern, so a node that starts
-        // where its parent does can come first; outer ones go first.
-        std.mem.sort(Span, s.spans.items, {}, outerFirst);
-        return s.spans.items;
+    }
+};
+
+/// One grammar's parse of the text, or of the parts of it another leaves.
+const Layer = struct {
+    query: *const Compiled,
+    parser: *ts.Parser,
+    tree: ?*ts.Tree = null,
+    /// The text has changed since the tree last matched it.
+    stale: bool = true,
+    /// A parse stopped partway and the next `step` carries it on.
+    resuming: bool = false,
+
+    fn init(index: usize) !Layer {
+        const q = query(index) orelse return error.BadQuery;
+        const parser = ts.ts_parser_new() orelse return error.OutOfMemory;
+        errdefer ts.ts_parser_delete(parser);
+        if (!ts.ts_parser_set_language(parser, grammars[index].language())) return error.IncompatibleGrammar;
+        return .{ .query = q, .parser = parser };
+    }
+
+    fn deinit(l: *Layer) void {
+        if (l.tree) |t| ts.ts_tree_delete(t);
+        ts.ts_parser_delete(l.parser);
+    }
+
+    fn edited(l: *Layer, edit: *const ts.InputEdit) void {
+        if (l.tree) |t| ts.ts_tree_edit(t, edit);
+        // A paused parse was of the old text.
+        if (l.resuming) ts.ts_parser_reset(l.parser);
+        l.resuming = false;
+        l.stale = true;
+    }
+
+    /// Parses until done or until `progress` runs out.
+    fn step(l: *Layer, text: *const PieceTree, progress: *Progress) void {
+        const input = ts.Input{ .payload = @ptrCast(@constCast(text)), .read = read };
+        const options = ts.ParseOptions{ .payload = progress, .progress_callback = Progress.check };
+        const parsed = ts.ts_parser_parse_with_options(l.parser, l.tree, input, options) orelse {
+            l.resuming = true;
+            return;
+        };
+        if (l.tree) |old| ts.ts_tree_delete(old);
+        l.tree = parsed;
+        l.stale = false;
+        l.resuming = false;
+    }
+};
+
+/// A layer parsed only inside some of the outer tree's nodes.
+const Inner = struct {
+    layer: Layer,
+    /// Finds those nodes in the outer tree.
+    nodes: *ts.Query,
+    ranges: std.ArrayList(ts.Range) = .empty,
+
+    /// Null when the outer grammar keeps all of its text, or the inner one
+    /// is not built in.
+    fn init(outer: usize) !?Inner {
+        for (nested) |n| {
+            if (!eql(n.outer, grammars[outer].name)) continue;
+            const index = grammarNamed(n.inner) orelse return null;
+            var layer = try Layer.init(index);
+            errdefer layer.deinit();
+            var error_offset: u32 = 0;
+            var error_type: ts.QueryError = .none;
+            const nodes = ts.ts_query_new(grammars[outer].language(), n.nodes.ptr, @intCast(n.nodes.len), &error_offset, &error_type) orelse
+                return error.BadQuery;
+            return .{ .layer = layer, .nodes = nodes };
+        }
+        return null;
+    }
+
+    fn deinit(i: *Inner, gpa: std.mem.Allocator) void {
+        i.layer.deinit();
+        ts.ts_query_delete(i.nodes);
+        i.ranges.deinit(gpa);
+    }
+
+    /// Points the parser at the nodes of `outer` it covers.
+    fn findRanges(i: *Inner, gpa: std.mem.Allocator, cursor: *ts.QueryCursor, outer: *const ts.Tree) !void {
+        i.ranges.clearRetainingCapacity();
+        _ = ts.ts_query_cursor_set_byte_range(cursor, 0, std.math.maxInt(u32));
+        ts.ts_query_cursor_exec(cursor, i.nodes, ts.ts_tree_root_node(outer));
+        var match: ts.QueryMatch = undefined;
+        var index: u32 = 0;
+        while (ts.ts_query_cursor_next_capture(cursor, &match, &index)) {
+            const node = match.captures[index].node;
+            try i.ranges.append(gpa, .{
+                .start_point = ts.ts_node_start_point(node),
+                .end_point = ts.ts_node_end_point(node),
+                .start_byte = ts.ts_node_start_byte(node),
+                .end_byte = ts.ts_node_end_byte(node),
+            });
+        }
+        // No ranges at all would mean the whole text.
+        if (i.ranges.items.len == 0) try i.ranges.append(gpa, std.mem.zeroes(ts.Range));
+        if (!ts.ts_parser_set_included_ranges(i.layer.parser, i.ranges.items.ptr, @intCast(i.ranges.items.len))) return error.BadRanges;
     }
 };
 
@@ -364,6 +464,16 @@ fn kindOf(name: []const u8) Kind {
         .{ .prefix = "attribute", .kind = .property },
         .{ .prefix = "field", .kind = .property },
         .{ .prefix = "tag", .kind = .tag },
+        .{ .prefix = "punctuation.special", .kind = .tag },
+        // Markdown and other prose, by Neovim's older names and newer ones.
+        .{ .prefix = "text.title", .kind = .tag },
+        .{ .prefix = "markup.heading", .kind = .tag },
+        .{ .prefix = "text.literal", .kind = .string },
+        .{ .prefix = "markup.raw", .kind = .string },
+        .{ .prefix = "text.uri", .kind = .property },
+        .{ .prefix = "markup.link.url", .kind = .property },
+        .{ .prefix = "text.reference", .kind = .type },
+        .{ .prefix = "markup.link", .kind = .type },
     };
     for (table) |entry| {
         if (std.mem.startsWith(u8, name, entry.prefix) and
@@ -389,6 +499,8 @@ test "capture names choose their kind by the most specific prefix" {
     try testing.expectEqual(Kind.function, kindOf("function.method.call"));
     try testing.expectEqual(Kind.none, kindOf("punctuation.bracket"));
     try testing.expectEqual(Kind.none, kindOf("typewriter"));
+    try testing.expectEqual(Kind.property, kindOf("markup.link.url"));
+    try testing.expectEqual(Kind.type, kindOf("markup.link.label"));
 }
 
 test "every built-in grammar's highlight query compiles" {
@@ -459,12 +571,12 @@ test "a large file parses a slice at a time" {
     var steps: usize = 0;
     while (s.stale) : (steps += 1) s.step(&text);
     try testing.expect(steps >= 3);
-    try testing.expect(s.tree != null);
+    try testing.expect(s.outer.tree != null);
 }
 
 test "languages without a built-in grammar get no highlighter" {
     try testing.expect(Syntax.create(testing.allocator, &language.plain) == null);
-    try testing.expect(Syntax.create(testing.allocator, language.detect("notes.md")) == null);
+    try testing.expect(Syntax.create(testing.allocator, language.detect("query.sql")) == null);
 }
 
 fn kindAt(s: *Syntax, text: *const PieceTree, src: []const u8, word: []const u8) ?Kind {
@@ -494,6 +606,53 @@ test "a YAML key is not coloured as the string it is written as" {
     defer s.destroy();
     while (s.stale) s.step(&text);
     try testing.expect(kindAt(s, &text, src, "name").? != .string);
+}
+
+test "Markdown colours headings, and the code and links inside its paragraphs" {
+    const src = "# Title\n\nSome `code` and a [link](https://x.org).\n";
+    var text = try PieceTree.initFromBytes(testing.allocator, src);
+    defer text.deinit();
+    const s = Syntax.create(testing.allocator, language.detect("notes.md")).?;
+    defer s.destroy();
+    while (s.stale) s.step(&text);
+    try testing.expectEqual(Kind.tag, kindAt(s, &text, src, "Title").?);
+    try testing.expectEqual(Kind.string, kindAt(s, &text, src, "code").?);
+    try testing.expectEqual(Kind.type, kindAt(s, &text, src, "link").?);
+    try testing.expectEqual(Kind.property, kindAt(s, &text, src, "https://x.org").?);
+    try testing.expect(kindAt(s, &text, src, "Some") == null);
+}
+
+test "an edit to Markdown text is picked up by the inline layer too" {
+    const src = "Some words.\n";
+    var text = try PieceTree.initFromBytes(testing.allocator, src);
+    defer text.deinit();
+    const s = Syntax.create(testing.allocator, language.detect("notes.md")).?;
+    defer s.destroy();
+    while (s.stale) s.step(&text);
+
+    try text.insert(5, "`new` ");
+    s.edited(.{
+        .start_byte = 5,
+        .old_end_byte = 5,
+        .new_end_byte = 11,
+        .start_point = .{ .row = 0, .column = 5 },
+        .old_end_point = .{ .row = 0, .column = 5 },
+        .new_end_point = .{ .row = 0, .column = 11 },
+    });
+    while (s.stale) s.step(&text);
+    const now = try text.allocText(testing.allocator);
+    defer testing.allocator.free(now);
+    try testing.expectEqual(Kind.string, kindAt(s, &text, now, "new").?);
+}
+
+test "Markdown with no text for the inline layer still parses" {
+    const src = "```\nlet x;\n```\n";
+    var text = try PieceTree.initFromBytes(testing.allocator, src);
+    defer text.deinit();
+    const s = Syntax.create(testing.allocator, language.detect("notes.md")).?;
+    defer s.destroy();
+    while (s.stale) s.step(&text);
+    try testing.expectEqual(Kind.string, kindAt(s, &text, src, "let x;").?);
 }
 
 test "spans that start together come outermost first" {

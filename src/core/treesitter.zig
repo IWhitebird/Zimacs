@@ -30,6 +30,13 @@ pub const InputEdit = extern struct {
     new_end_point: Point,
 };
 
+pub const Range = extern struct {
+    start_point: Point,
+    end_point: Point,
+    start_byte: u32,
+    end_byte: u32,
+};
+
 pub const Node = extern struct {
     context: [4]u32,
     id: ?*const anyopaque,
@@ -74,6 +81,7 @@ pub extern fn ts_parser_delete(parser: *Parser) void;
 pub extern fn ts_parser_set_language(parser: *Parser, language: *const Language) bool;
 pub extern fn ts_parser_parse_with_options(parser: *Parser, old_tree: ?*const Tree, input: Input, options: ParseOptions) ?*Tree;
 pub extern fn ts_parser_reset(parser: *Parser) void;
+pub extern fn ts_parser_set_included_ranges(parser: *Parser, ranges: [*]const Range, count: u32) bool;
 
 pub extern fn ts_tree_delete(tree: *Tree) void;
 pub extern fn ts_tree_edit(tree: *Tree, edit: *const InputEdit) void;
@@ -81,6 +89,8 @@ pub extern fn ts_tree_root_node(tree: *const Tree) Node;
 
 pub extern fn ts_node_start_byte(node: Node) u32;
 pub extern fn ts_node_end_byte(node: Node) u32;
+pub extern fn ts_node_start_point(node: Node) Point;
+pub extern fn ts_node_end_point(node: Node) Point;
 
 pub extern fn ts_query_new(language: *const Language, source: [*]const u8, source_len: u32, error_offset: *u32, error_type: *QueryError) ?*Query;
 pub extern fn ts_query_delete(query: *Query) void;

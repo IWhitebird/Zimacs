@@ -80,6 +80,22 @@
             .url = "https://github.com/tree-sitter/tree-sitter-typescript/archive/refs/tags/v0.23.2.tar.gz",
             .hash = "N-V-__8AALhpIQFpocCrfuYTb_Vzvxj3QG0T-yqi9x1QNRNM",
         },
+        .ts_markdown = .{
+            .url = "https://github.com/tree-sitter-grammars/tree-sitter-markdown/archive/refs/tags/v0.5.3.tar.gz",
+            .hash = "N-V-__8AAOphUwCl_jXY5BvJ_I-kB6cZuE48ZpMar9Gq2SiD",
+        },
+        .ts_make = .{
+            .url = "https://github.com/tree-sitter-grammars/tree-sitter-make/archive/refs/tags/v1.1.1.tar.gz",
+            .hash = "N-V-__8AAD6dEwA9hwePYcn8FdDAJEeYqCBBlYI2Oey6O5g2",
+        },
+        .ts_xml = .{
+            .url = "https://github.com/tree-sitter-grammars/tree-sitter-xml/archive/refs/tags/v0.7.0.tar.gz",
+            .hash = "N-V-__8AANiLCgA6Dig3mCIr1h7vuHbaN44MriRpuiaA0H7O",
+        },
+        .ts_dockerfile = .{
+            .url = "https://github.com/camdencheek/tree-sitter-dockerfile/archive/refs/tags/v0.2.0.tar.gz",
+            .hash = "N-V-__8AAHLFBgBf_PAMkRDRjf03KDFA7-u56Wb2Jpf_TiQD",
+        },
     },
 
     .paths = .{

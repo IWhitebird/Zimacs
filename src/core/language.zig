@@ -57,8 +57,8 @@ pub const all = [_]Language{
     .{ .name = "YAML", .extensions = &.{ "yml", "yaml" }, .line_comment = "#", .grammar = "yaml" },
     .{ .name = "TOML", .extensions = &.{"toml"}, .line_comment = "#", .grammar = "toml" },
     .{ .name = "INI", .extensions = &.{ "ini", "cfg", "conf" }, .file_names = &.{ ".gitignore", ".gitattributes", ".editorconfig" }, .line_comment = "#" },
-    .{ .name = "Makefile", .extensions = &.{"mk"}, .file_names = &.{ "Makefile", "makefile", "GNUmakefile" }, .line_comment = "#" },
-    .{ .name = "Dockerfile", .extensions = &.{"dockerfile"}, .file_names = &.{"Dockerfile"}, .line_comment = "#" },
+    .{ .name = "Makefile", .extensions = &.{"mk"}, .file_names = &.{ "Makefile", "makefile", "GNUmakefile" }, .line_comment = "#", .grammar = "make" },
+    .{ .name = "Dockerfile", .extensions = &.{"dockerfile"}, .file_names = &.{"Dockerfile"}, .line_comment = "#", .grammar = "dockerfile" },
     .{ .name = "CMake", .extensions = &.{"cmake"}, .file_names = &.{"CMakeLists.txt"}, .line_comment = "#" },
     .{ .name = "Nix", .extensions = &.{"nix"}, .line_comment = "#" },
     .{ .name = "R", .extensions = &.{"r"}, .line_comment = "#" },
@@ -70,8 +70,8 @@ pub const all = [_]Language{
     .{ .name = "Erlang", .extensions = &.{ "erl", "hrl" }, .line_comment = "%" },
     .{ .name = "LaTeX", .extensions = &.{ "tex", "sty", "cls" }, .line_comment = "%", .quotes = "" },
     .{ .name = "HTML", .extensions = &.{ "html", "htm", "xhtml", "vue", "svelte" }, .block_comment = markup, .grammar = "html" },
-    .{ .name = "XML", .extensions = &.{ "xml", "svg", "xsd", "xsl", "plist" }, .block_comment = markup },
-    .{ .name = "Markdown", .extensions = &.{ "md", "markdown" }, .block_comment = markup, .code = false, .quotes = "" },
+    .{ .name = "XML", .extensions = &.{ "xml", "svg", "xsd", "xsl", "plist" }, .block_comment = markup, .grammar = "xml" },
+    .{ .name = "Markdown", .extensions = &.{ "md", "markdown" }, .block_comment = markup, .code = false, .quotes = "", .grammar = "markdown" },
 };
 
 /// The language of a file called `name`, which may be a whole path.
