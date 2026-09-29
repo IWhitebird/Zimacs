@@ -27,12 +27,13 @@ const markup = [2][]const u8{ "<!--", "-->" };
 
 pub const all = [_]Language{
     .{ .name = "C", .extensions = &.{ "c", "h" }, .line_comment = "//", .block_comment = c_like, .grammar = "c" },
-    .{ .name = "C++", .extensions = &.{ "cc", "cpp", "cxx", "hh", "hpp", "hxx", "ino" }, .line_comment = "//", .block_comment = c_like },
+    .{ .name = "C++", .extensions = &.{ "cc", "cpp", "cxx", "hh", "hpp", "hxx", "ino" }, .line_comment = "//", .block_comment = c_like, .grammar = "cpp" },
     .{ .name = "Zig", .extensions = &.{ "zig", "zon" }, .line_comment = "//", .grammar = "zig" },
     .{ .name = "Rust", .extensions = &.{"rs"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"", .grammar = "rust" },
     .{ .name = "Go", .extensions = &.{"go"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`", .grammar = "go" },
     .{ .name = "JavaScript", .extensions = &.{ "js", "mjs", "cjs", "jsx" }, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`", .grammar = "javascript" },
-    .{ .name = "TypeScript", .extensions = &.{ "ts", "mts", "cts", "tsx" }, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`" },
+    .{ .name = "TypeScript", .extensions = &.{ "ts", "mts", "cts" }, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`", .grammar = "typescript" },
+    .{ .name = "TSX", .extensions = &.{"tsx"}, .line_comment = "//", .block_comment = c_like, .quotes = "\"'`", .grammar = "tsx" },
     .{ .name = "Java", .extensions = &.{"java"}, .line_comment = "//", .block_comment = c_like, .grammar = "java" },
     .{ .name = "Kotlin", .extensions = &.{ "kt", "kts" }, .line_comment = "//", .block_comment = c_like },
     .{ .name = "C#", .extensions = &.{"cs"}, .line_comment = "//", .block_comment = c_like },

@@ -46,11 +46,18 @@ var grammars = blk: {
     for (built_in.names, 0..) |name, i| list[i] = .{
         .name = name,
         .language = @extern(*const fn () callconv(.c) *const ts.Language, .{ .name = "tree_sitter_" ++ name }),
-        .highlights = @embedFile("highlights_" ++ name),
+        .highlights = joinedQuery(name, built_in.query_files[i]),
         .overrides = built_in.overrides[i],
     };
     break :blk list;
 };
+
+/// A grammar's highlight query, joined from the files the build embedded.
+fn joinedQuery(comptime name: []const u8, comptime files: u32) []const u8 {
+    var text: []const u8 = "";
+    for (0..files) |i| text = text ++ @embedFile(std.fmt.comptimePrint("highlights_{s}_{d}", .{ name, i })) ++ "\n";
+    return text;
+}
 
 const Compiled = struct {
     query: *ts.Query,

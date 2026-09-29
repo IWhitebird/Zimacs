@@ -72,6 +72,14 @@
             .url = "https://github.com/tree-sitter/tree-sitter-java/archive/refs/tags/v0.23.5.tar.gz",
             .hash = "N-V-__8AABzeLgA7t_QWhWcrSnR4kOonfpr41QOXvsiuAyhW",
         },
+        .ts_cpp = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-cpp/archive/refs/tags/v0.23.4.tar.gz",
+            .hash = "N-V-__8AABV0FwFoNpDVbhYQMEJgss9bkxDorw6hbZVJPCdg",
+        },
+        .ts_typescript = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-typescript/archive/refs/tags/v0.23.2.tar.gz",
+            .hash = "N-V-__8AALhpIQFpocCrfuYTb_Vzvxj3QG0T-yqi9x1QNRNM",
+        },
     },
 
     .paths = .{

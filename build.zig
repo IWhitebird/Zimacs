@@ -169,10 +169,13 @@ const App = struct {
     }
 };
 
-/// A Tree-sitter grammar built in, by the name `language.zig` gives it. Its
-/// package in build.zig.zon is `ts_` and the name.
+/// A Tree-sitter grammar built in, by the name `language.zig` gives it.
 const Grammar = struct {
     name: []const u8,
+    /// Its package in build.zig.zon is `ts_` and this, or else the name.
+    package: ?[]const u8 = null,
+    /// Where its `src` folder is, in a package holding several grammars.
+    dir: []const u8 = "",
     /// Whether it has a hand-written scanner beside its generated parser.
     scanner: bool,
     /// Also built into the web demo, which shows a C file.
@@ -180,16 +183,27 @@ const Grammar = struct {
     /// Its highlight query is written for Neovim, where a later pattern
     /// overrides an earlier one for the same node rather than the reverse.
     overrides: bool = false,
+    /// Its highlight query, joined from these files in order, as its own
+    /// tree-sitter.json lists them.
+    queries: []const Query = &.{.{}},
 };
 
-/// C++ and TypeScript are left out for now: their grammars are several
-/// megabytes each.
+/// One file of a highlight query.
+const Query = struct {
+    /// The grammar whose package holds it, when not the grammar's own.
+    from: ?[]const u8 = null,
+    path: []const u8 = "queries/highlights.scm",
+};
+
 const grammars = [_]Grammar{
     .{ .name = "c", .scanner = false, .web = true },
+    .{ .name = "cpp", .scanner = true, .queries = &.{ .{ .from = "c" }, .{} } },
     .{ .name = "zig", .scanner = false, .overrides = true },
     .{ .name = "json", .scanner = false },
     .{ .name = "python", .scanner = true },
-    .{ .name = "javascript", .scanner = true },
+    .{ .name = "javascript", .scanner = true, .queries = &.{ .{}, .{ .path = "queries/highlights-jsx.scm" }, .{ .path = "queries/highlights-params.scm" } } },
+    .{ .name = "typescript", .package = "typescript", .dir = "typescript", .scanner = true, .queries = &.{ .{}, .{ .from = "javascript" } } },
+    .{ .name = "tsx", .package = "typescript", .dir = "tsx", .scanner = true, .queries = &.{ .{}, .{ .from = "javascript", .path = "queries/highlights-jsx.scm" }, .{ .from = "javascript" } } },
     .{ .name = "rust", .scanner = true },
     .{ .name = "go", .scanner = false },
     .{ .name = "java", .scanner = false },
@@ -220,20 +234,30 @@ fn addSyntax(b: *std.Build, module: *std.Build.Module, web: bool) void {
 
     var names: std.ArrayList([]const u8) = .empty;
     var overrides: std.ArrayList(bool) = .empty;
+    var query_files: std.ArrayList(u32) = .empty;
     for (grammars) |g| {
         if (web and !g.web) continue;
-        const dep = b.dependency(b.fmt("ts_{s}", .{g.name}), .{});
-        module.addCSourceFile(.{ .file = dep.path("src/parser.c"), .flags = &c_flags });
-        if (g.scanner) module.addCSourceFile(.{ .file = dep.path("src/scanner.c"), .flags = &c_flags });
-        module.addAnonymousImport(b.fmt("highlights_{s}", .{g.name}), .{
-            .root_source_file = dep.path("queries/highlights.scm"),
-        });
+        const dep = b.dependency(b.fmt("ts_{s}", .{g.package orelse g.name}), .{});
+        const src = if (g.dir.len > 0) b.fmt("{s}/src", .{g.dir}) else "src";
+        // Code shared between a package's grammars looks for the parser
+        // header on the include path rather than beside itself.
+        if (g.dir.len > 0) module.addIncludePath(dep.path(src));
+        module.addCSourceFile(.{ .file = dep.path(b.fmt("{s}/parser.c", .{src})), .flags = &c_flags });
+        if (g.scanner) module.addCSourceFile(.{ .file = dep.path(b.fmt("{s}/scanner.c", .{src})), .flags = &c_flags });
+        for (g.queries, 0..) |q, i| {
+            const holder = if (q.from) |from| b.dependency(b.fmt("ts_{s}", .{from}), .{}) else dep;
+            module.addAnonymousImport(b.fmt("highlights_{s}_{d}", .{ g.name, i }), .{
+                .root_source_file = holder.path(q.path),
+            });
+        }
         names.append(b.allocator, g.name) catch @panic("OOM");
         overrides.append(b.allocator, g.overrides) catch @panic("OOM");
+        query_files.append(b.allocator, @intCast(g.queries.len)) catch @panic("OOM");
     }
     const options = b.addOptions();
     options.addOption([]const []const u8, "names", names.items);
     options.addOption([]const bool, "overrides", overrides.items);
+    options.addOption([]const u32, "query_files", query_files.items);
     module.addOptions("grammars", options);
 }
 
