@@ -1,4 +1,4 @@
-//! The files you opened lately, newest first.
+//! The files, or folders, you opened lately, newest first.
 //!
 //! Kept as one path per line next to the session, so Ctrl+R can offer them
 //! without having to search the disk.
@@ -6,13 +6,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const file_name = "recent";
-
 const max_entries = 20;
 const max_bytes = 64 * 1024;
 
 pub const Recent = struct {
     gpa: Allocator = undefined,
+    /// Its file beside the session.
+    file_name: []const u8,
     paths: std.ArrayList([]const u8) = .empty,
 
     const Self = @This();
@@ -51,7 +51,7 @@ pub const Recent = struct {
         var open = std.Io.Dir.cwd().openDir(io, dir, .{}) catch return;
         defer open.close(io);
 
-        const text = open.readFileAlloc(io, file_name, r.gpa, .limited(max_bytes)) catch return;
+        const text = open.readFileAlloc(io, r.file_name, r.gpa, .limited(max_bytes)) catch return;
         defer r.gpa.free(text);
 
         // Read in reverse so `add` leaves the file's order intact.
@@ -80,7 +80,7 @@ pub const Recent = struct {
             try out.appendSlice(r.gpa, p);
             try out.append(r.gpa, '\n');
         }
-        try open.writeFile(io, .{ .sub_path = file_name, .data = out.items });
+        try open.writeFile(io, .{ .sub_path = r.file_name, .data = out.items });
     }
 };
 
@@ -89,7 +89,7 @@ pub const Recent = struct {
 const testing = std.testing;
 
 test "newest first" {
-    var r = Recent{ .gpa = testing.allocator };
+    var r = Recent{ .gpa = testing.allocator, .file_name = "recent" };
     defer r.deinit();
 
     try r.add("/a");
@@ -102,7 +102,7 @@ test "newest first" {
 }
 
 test "reopening moves a file to the front without duplicating it" {
-    var r = Recent{ .gpa = testing.allocator };
+    var r = Recent{ .gpa = testing.allocator, .file_name = "recent" };
     defer r.deinit();
 
     try r.add("/a");
@@ -115,7 +115,7 @@ test "reopening moves a file to the front without duplicating it" {
 }
 
 test "the list is capped" {
-    var r = Recent{ .gpa = testing.allocator };
+    var r = Recent{ .gpa = testing.allocator, .file_name = "recent" };
     defer r.deinit();
 
     var buf: [32]u8 = undefined;
@@ -129,7 +129,7 @@ test "the list is capped" {
 }
 
 test "empty paths are ignored" {
-    var r = Recent{ .gpa = testing.allocator };
+    var r = Recent{ .gpa = testing.allocator, .file_name = "recent" };
     defer r.deinit();
     try r.add("");
     try testing.expectEqual(@as(usize, 0), r.items().len);

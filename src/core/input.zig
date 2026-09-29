@@ -22,6 +22,7 @@ const wrap = @import("wrap.zig");
 const language = @import("language.zig");
 const browser_mod = @import("browser.zig");
 const config_mod = @import("config.zig");
+const welcome = @import("welcome.zig");
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
@@ -522,6 +523,7 @@ fn windowShortcuts() !void {
     if (pressed(.b)) try commands.run(.toggle_sidebar);
     if (pressed(.p)) try commands.run(.quick_open);
     if (pressed(.n)) try commands.run(.new_tab);
+    if (pressed(.t) and shift) try commands.run(.reopen_tab);
     if (pressed(.w)) try commands.run(.close_tab);
     if (pressed(.o)) try commands.run(if (shift) .open_folder else .open_file);
     if (pressed(.r)) try commands.run(.open_recent);
@@ -585,6 +587,7 @@ fn mouse() !void {
 
     if (pen.isMouseButtonPressed(.left)) {
         if (pen.checkCollisionPointRec(point, l.sidebar)) return clickSidebar(point, l);
+        if (app.buffer.current() == null) return clickWelcome(point, l);
         if (app.editor.tabs.closeAt(l.tabs, point)) |index| {
             try commands.requestClose(index);
             return;
@@ -639,6 +642,18 @@ fn mouse() !void {
             if (point.y < l.text.y) app.editor.scroll(-1);
             if (point.y > l.text.y + l.text.height) app.editor.scroll(1);
         },
+    }
+}
+
+/// A button of the empty screen runs its command; a recent folder or file
+/// opens.
+fn clickWelcome(point: pen.Vector2, l: layout_mod.Layout) !void {
+    var rows_buf: [welcome.max_rows]welcome.Row = undefined;
+    const rows = welcome.rows(app.recent_folders.items(), app.recent.items(), &rows_buf);
+    const g = welcome.geometry(l, app.font.metrics, rows.len);
+    switch (welcome.hit(g, rows.len, point) orelse return) {
+        .button => |i| try commands.run(welcome.actions[i]),
+        .row => |i| app.openPath(rows[i].path) catch |err| report("Could not open", err),
     }
 }
 
@@ -854,6 +869,7 @@ fn commitPrompt() !void {
         .browse => try commands.chooseInBrowser(chosen),
         .save_into => try commands.saveInBrowser(chosen),
         .open => app.openFile(chosen) catch |err| report("Could not open", err),
+        .recent => app.openPath(chosen) catch |err| report("Could not open", err),
         .open_folder => app.openFolder(chosen) catch |err| report("Could not open the folder", err),
         .quick_open => commands.openInFolder(chosen),
         .search_folder => if (option) |hit| commands.openHit(hit),

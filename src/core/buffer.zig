@@ -396,6 +396,12 @@ pub const BufferView = struct {
     }
 };
 
+/// A tab closed with a file behind it.
+pub const Closed = struct { path: []const u8, caret: u32, top_line: u32 };
+
+/// Closed tabs remembered for reopening.
+const max_closed = 20;
+
 pub const Buffer = struct {
     /// Set by the app before `init`, so this file needs nothing from it.
     gpa: Allocator = undefined,
@@ -404,7 +410,8 @@ pub const Buffer = struct {
 
     views: std.ArrayList(*BufferView) = .empty,
     active: usize = 0,
-    untitled_count: u32 = 0,
+    /// Tabs of files closed lately, newest last, for Reopen Closed Tab.
+    closed: std.ArrayList(Closed) = .empty,
     next_view_id: u64 = 1,
 
     const Self = @This();
@@ -430,6 +437,8 @@ pub const Buffer = struct {
             b.gpa.destroy(v);
         }
         b.views.deinit(b.gpa);
+        for (b.closed.items) |c| b.gpa.free(c.path);
+        b.closed.deinit(b.gpa);
     }
 
     /// Holds state only; the Editor draws it.
@@ -456,12 +465,38 @@ pub const Buffer = struct {
         b.active = (b.active + b.views.items.len - 1) % b.views.items.len;
     }
 
-    /// An empty unnamed buffer, so there is always somewhere to type.
+    /// An empty unnamed buffer, numbered with the lowest number no open
+    /// one has.
     pub fn newScratch(b: *Self) !*BufferView {
-        b.untitled_count += 1;
-        const name = try std.fmt.allocPrint(b.gpa, "untitled {d}", .{b.untitled_count});
+        var number: u32 = 1;
+        while (b.untitledOpen(number)) number += 1;
+        const name = try std.fmt.allocPrint(b.gpa, untitled_name, .{number});
         errdefer b.gpa.free(name);
         return b.add(try PieceTree.init(b.gpa), null, name);
+    }
+
+    const untitled_name = "untitled {d}";
+
+    fn untitledOpen(b: *const Self, number: u32) bool {
+        var buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrint(&buf, untitled_name, .{number}) catch return false;
+        for (b.views.items) |v| if (v.path == null and std.mem.eql(u8, v.name, name)) return true;
+        return false;
+    }
+
+    /// Opens the file of the tab closed last, where its caret was, skipping
+    /// any whose file has gone since. False when there is none left.
+    pub fn reopenClosed(b: *Self) bool {
+        while (b.closed.pop()) |c| {
+            defer b.gpa.free(c.path);
+            b.openOrSelect(c.path) catch continue;
+            const view = b.current() orelse return true;
+            view.cursor.moveTo(&view.tree, @min(c.caret, view.tree.len()), false);
+            view.top_line = @min(c.top_line, view.tree.lineCount() -| 1);
+            view.followed = view.cursor.offset;
+            return true;
+        }
+        return false;
     }
 
     /// A named buffer that already holds text, with no file behind it. The
@@ -592,20 +627,24 @@ pub const Buffer = struct {
         return view;
     }
 
-    /// Closes a tab. Always leaves at least one buffer open.
-    pub fn close(b: *Self, index: usize) !void {
+    /// Closes a tab, remembering where it was if it has a file. Closing the
+    /// last one leaves none.
+    pub fn close(b: *Self, index: usize) void {
         if (index >= b.views.items.len) return;
         const view = b.views.orderedRemove(index);
+        b.remember(view);
         view.deinit();
         b.gpa.destroy(view);
 
-        if (b.views.items.len == 0) {
-            _ = try b.newScratch();
-            return;
-        }
         // The active tab stays active when one before it closes.
         if (index < b.active) b.active -= 1;
-        if (b.active >= b.views.items.len) b.active = b.views.items.len - 1;
+        b.active = @min(b.active, b.views.items.len -| 1);
+    }
+
+    fn remember(b: *Self, view: *const BufferView) void {
+        const path = b.gpa.dupe(u8, view.path orelse return) catch return;
+        b.closed.append(b.gpa, .{ .path = path, .caret = view.cursor.offset, .top_line = view.top_line }) catch return b.gpa.free(path);
+        if (b.closed.items.len > max_closed) b.gpa.free(b.closed.orderedRemove(0).path);
     }
 
     pub const Saved = enum { as_before, switched_to_utf8 };
@@ -1171,7 +1210,7 @@ test "closing a tab before the active one keeps the same tab active" {
     const two = try b.newFilled("two", "2");
     _ = try b.newFilled("three", "3");
     b.active = 1;
-    try b.close(0);
+    b.close(0);
     try testing.expectEqual(two, b.current().?);
 }
 
@@ -1219,4 +1258,47 @@ test "reloading a file that grew keeps only the new part in the history" {
     try testing.expectEqualStrings("three\n", last.inserted);
     try testing.expectEqualStrings("", last.removed);
     try testing.expect(!v.edited());
+}
+
+test "closing the last tab leaves none, and untitled numbers are reused" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b));
+    _ = try b.newScratch();
+    const second = try b.newScratch();
+    try testing.expectEqualStrings("untitled 2", second.name);
+    b.close(0);
+    const again = try b.newScratch();
+    try testing.expectEqualStrings("untitled 1", again.name);
+    b.close(1);
+    b.close(0);
+    try testing.expect(b.current() == null);
+}
+
+test "a closed tab comes back with its caret, and a gone file is skipped" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.txt", .data = "one\ntwo\nthree\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "b.txt", .data = "b" });
+    var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const dir = dir_buf[0..try tmp.dir.realPath(io, &dir_buf)];
+    const a = try std.fs.path.join(gpa, &.{ dir, "a.txt" });
+    defer gpa.free(a);
+    const bpath = try std.fs.path.join(gpa, &.{ dir, "b.txt" });
+    defer gpa.free(bpath);
+
+    var b = Buffer{ .gpa = gpa, .io = io };
+    defer Buffer.deinit(@ptrCast(&b));
+    try b.openOrSelect(a);
+    b.current().?.cursor.moveTo(&b.current().?.tree, 6, false);
+    try b.openOrSelect(bpath);
+    b.close(0);
+    b.close(0);
+    // The newest is b.txt; with it gone, a.txt comes back instead.
+    try tmp.dir.deleteFile(io, "b.txt");
+    try testing.expect(b.reopenClosed());
+    try testing.expectEqualStrings("a.txt", b.current().?.name);
+    try testing.expectEqual(@as(u32, 6), b.current().?.cursor.offset);
+    try testing.expect(!b.reopenClosed());
 }

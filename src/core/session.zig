@@ -568,7 +568,7 @@ test "text from an earlier save or a closed tab does not stay on disk" {
     const second = try b.newScratch();
     try second.insert("kept");
     try save(&b, .{}, testing.io, testing.allocator, session_dir);
-    try b.close(0);
+    b.close(0);
     try save(&b, .{}, testing.io, testing.allocator, session_dir);
 
     var dir = try std.Io.Dir.cwd().openDir(testing.io, session_dir, .{ .iterate = true });

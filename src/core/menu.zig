@@ -18,6 +18,7 @@ pub const Action = enum {
     quick_open,
     search_folder,
     open_recent,
+    reopen_tab,
     save,
     save_as,
     close_tab,
@@ -77,6 +78,7 @@ pub const bar = [_]Group{
         .{ .label = "Go to File...", .shortcut = "Ctrl+P", .action = .quick_open },
         .{ .label = "Close Folder", .action = .close_folder },
         .{ .label = "Open Recent", .shortcut = "Ctrl+R", .action = .open_recent },
+        .{ .label = "Reopen Closed Tab", .shortcut = "Ctrl+Shift+T", .action = .reopen_tab },
         .{ .label = "Save", .shortcut = "Ctrl+S", .action = .save },
         .{ .label = "Save As...", .shortcut = "Ctrl+Shift+S", .action = .save_as },
         .{ .label = "Close Tab", .shortcut = "Ctrl+W", .action = .close_tab },
@@ -138,6 +140,12 @@ pub const Menu = struct {
 };
 
 // ------------------------------------------------------------- geometry
+
+/// The menu entry that runs `action`, for its name and keys.
+pub fn entryFor(action: Action) ?Entry {
+    for (bar) |group| for (group.entries) |e| if (e.action == action) return e;
+    return null;
+}
 
 pub fn entryHeight(font: Font) f32 {
     return font.metrics.height + layout.padding * 0.75;

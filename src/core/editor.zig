@@ -29,6 +29,7 @@ const Range = @import("cursor.zig").Range;
 const brackets = @import("brackets.zig");
 const syntax = @import("syntax.zig");
 const widgets = @import("widgets.zig");
+const welcome = @import("welcome.zig");
 
 pub const Editor = struct {
     /// One line as stored, then the same line with tabs expanded.
@@ -99,19 +100,14 @@ pub const Editor = struct {
         const l = currentLayout();
 
         drawSidebar(l, cell);
-        const view = app.buffer.current() orelse {
-            try drawHint(l, cell);
-            drawMenu(l, cell);
-            drawDialog(l, cell);
-            drawFrame(l);
-            return;
-        };
-
-        try e.follow(view, l, cell);
-        try e.drawText(view, l, cell);
-        try e.drawGutter(view, l, cell);
-        drawScrollbars(view, l, cell);
-        try e.drawTabs(l);
+        const view = app.buffer.current();
+        if (view) |v| {
+            try e.follow(v, l, cell);
+            try e.drawText(v, l, cell);
+            try e.drawGutter(v, l, cell);
+            drawScrollbars(v, l, cell);
+            try e.drawTabs(l);
+        } else drawWelcome(l, cell);
         try e.drawStatus(view, l, cell);
         try e.drawPrompt(l, cell);
         try drawFindBar(l, cell);
@@ -601,34 +597,36 @@ pub const Editor = struct {
         drawOverflowFades(l.tabs, e.tabs);
     }
 
-    fn drawStatus(e: *Self, view: *BufferView, l: Layout, cell: Metrics) !void {
+    fn drawStatus(e: *Self, view: ?*BufferView, l: Layout, cell: Metrics) !void {
         pen.drawRectangleRec(l.status, theme.current.status_background);
         const y = l.status.y + (l.status.height - cell.height) / 2;
 
         // The position readout is measured first so the file name knows how
         // much room is left, and is clipped rather than running under it.
         var label_buf: [96]u8 = undefined;
-        // Reported as screen columns, so it agrees with where the caret is
-        // drawn on a line holding tabs or multi-byte characters.
-        const at = .{
-            .line = view.cursor.position(&view.tree).line + 1,
-            .column = (try e.caretColumn(view)) + 1,
-        };
-        const label = if (view.cursor.selection()) |sel|
-            std.fmt.bufPrintZ(&label_buf, "{d} selected    Ln {d}, Col {d}", .{ sel.len(), at.line, at.column }) catch return
-        else
-            std.fmt.bufPrintZ(&label_buf, "Ln {d}, Col {d}", .{ at.line, at.column }) catch return;
+        const label: ?[:0]const u8 = if (view) |v| label: {
+            // Reported as screen columns, so it agrees with where the caret
+            // is drawn on a line holding tabs or multi-byte characters.
+            const at = .{
+                .line = v.cursor.position(&v.tree).line + 1,
+                .column = (try e.caretColumn(v)) + 1,
+            };
+            break :label if (v.cursor.selection()) |sel|
+                std.fmt.bufPrintZ(&label_buf, "{d} selected    Ln {d}, Col {d}", .{ sel.len(), at.line, at.column }) catch return
+            else
+                std.fmt.bufPrintZ(&label_buf, "Ln {d}, Col {d}", .{ at.line, at.column }) catch return;
+        } else null;
 
         // Right to left: position, language and file format, update state,
         // then a notice.
         var format_buf: [64]u8 = undefined;
-        const format = std.fmt.bufPrintZ(&format_buf, "{s}  {s}  {s}", .{
-            view.language.name, view.format.encoding.label(), view.format.line_ending.label(),
-        }) catch "";
+        const format: ?[:0]const u8 = if (view) |v| std.fmt.bufPrintZ(&format_buf, "{s}  {s}  {s}", .{
+            v.language.name, v.format.encoding.label(), v.format.line_ending.label(),
+        }) catch "" else null;
         const t = theme.current;
         const segments = [_]?Segment{
-            .{ .text = label, .colour = t.status_text },
-            .{ .text = format, .colour = t.status_text },
+            if (label) |s| Segment{ .text = s, .colour = t.status_text } else null,
+            if (format) |s| Segment{ .text = s, .colour = t.status_text } else null,
             if (updateNotice()) |n| Segment{ .text = n, .colour = if (app.update.status() == .available) t.caret else t.hint } else null,
             if (app.notice.text(pen.getTime())) |n| Segment{ .text = n, .colour = if (app.notice.kind == .problem) t.warning else t.status_text } else null,
         };
@@ -640,10 +638,11 @@ pub const Editor = struct {
             right_x -= layout.padding * 3;
         }
 
+        const v = view orelse return;
         e.status.clearRetainingCapacity();
         try e.status.print(app.gpa, "{s}{s}", .{
-            view.path orelse view.name,
-            if (view.edited()) " *" else "",
+            v.path orelse v.name,
+            if (v.edited()) " *" else "",
         });
         pen.beginScissorMode(
             @intFromFloat(l.status.x),
@@ -682,9 +681,10 @@ pub const Editor = struct {
         } else {
             try e.status.appendSlice(app.gpa, app.prompt.text());
         }
-        const room: u32 = @intFromFloat(@max((panel.width - layout.padding * 2) / cell.width - 1, 0));
+        const columns: u32 = @intFromFloat(@max((panel.width - layout.padding * 2) / cell.width, 0));
         var fitted_buf: [prompt_line_capacity]u8 = undefined;
-        const fitted = text.fitStart(&fitted_buf, e.status.items, room -| @as(u32, @intCast(label.len)));
+        // One column is left for the caret.
+        const fitted = text.fitStart(&fitted_buf, e.status.items, columns -| 1 -| @as(u32, @intCast(label.len)));
         e.status.clearRetainingCapacity();
         try e.status.print(app.gpa, "{s}{s}", .{ label, fitted });
         const typed = try terminate(&e.status);
@@ -714,8 +714,15 @@ pub const Editor = struct {
             const hot = app.prompt.first + row == app.prompt.highlighted() or pen.checkCollisionPointRec(point, rect);
             if (hot) pen.drawRectangleRec(rect, theme.current.selection);
 
+            // Paths lose their start, so the name shows; a search hit keeps
+            // its path and loses the end of its line.
+            const whole = app.prompt.options[option];
+            const shown_part = if (app.prompt.kind == .search_folder)
+                whole[0..text.offsetOf(whole, columns, 1)]
+            else
+                text.fitStart(&fitted_buf, whole, columns);
             e.status.clearRetainingCapacity();
-            try e.status.appendSlice(app.gpa, app.prompt.options[option]);
+            try e.status.appendSlice(app.gpa, shown_part);
             app.font.draw(
                 try terminate(&e.status),
                 rect.x + layout.padding,
@@ -725,18 +732,43 @@ pub const Editor = struct {
         }
     }
 
-    fn drawHint(l: Layout, cell: Metrics) !void {
-        pen.drawRectangleRec(l.text, theme.current.background);
-        pen.drawRectangleRec(l.gutter, theme.current.background);
-        pen.drawRectangleRec(l.status, theme.current.status_background);
+    /// With no tab open: buttons to start, and what was opened lately.
+    fn drawWelcome(l: Layout, cell: Metrics) void {
+        const t = theme.current;
+        pen.drawRectangleRec(l.text, t.background);
+        pen.drawRectangleRec(l.gutter, t.background);
 
-        const message = "Drop a file here, or press Ctrl+N";
-        app.font.draw(
-            message,
-            l.text.x + @max((l.text.width - app.font.widthOf(message)) / 2, layout.padding),
-            l.text.y + (l.text.height - cell.height) / 2,
-            theme.current.hint,
-        );
+        var rows_buf: [welcome.max_rows]welcome.Row = undefined;
+        const rows = welcome.rows(app.recent_folders.items(), app.recent.items(), &rows_buf);
+        const g = welcome.geometry(l, cell, rows.len);
+        const point = pen.getMousePosition();
+        const inset = (g.buttons[0].height - cell.height) / 2;
+        for (welcome.actions, g.buttons) |action, rect| {
+            const entry = menu.entryFor(action) orelse continue;
+            widgets.drawIconButton(rect, point);
+            pen.drawRectangleLinesEx(rect, 1, t.scrollbar);
+            app.font.draw(entry.label, rect.x + layout.padding, rect.y + inset, widgets.hoverInk(rect, point));
+            const keys_x = rect.x + rect.width - layout.padding - app.font.widthOf(entry.shortcut);
+            app.font.draw(entry.shortcut, keys_x, rect.y + inset, t.hint);
+        }
+        if (rows.len == 0) return;
+
+        const row_inset = (g.first_row.height - cell.height) / 2;
+        app.font.draw("Recent", g.first_row.x, g.heading_y + row_inset, t.hint);
+        var label_buf: [max_row_label]u8 = undefined;
+        for (rows, 0..) |row, i| {
+            const rect = g.row(i);
+            if (pen.checkCollisionPointRec(point, rect)) pen.drawRectangleRec(rect, t.current_line);
+            const name = std.fmt.bufPrintZ(&label_buf, "{s}{s}", .{ std.fs.path.basename(row.path), if (row.folder) "/" else "" }) catch continue;
+            const x = rect.x + layout.padding;
+            const y = rect.y + row_inset;
+            app.font.draw(name, x, y, t.text);
+            // Where it is, cut from the start to fit what room is left.
+            const after = x + app.font.widthOf(name) + cell.width * 2;
+            const room: u32 = @intFromFloat(@max((rect.x + rect.width - layout.padding - after) / cell.width, 0));
+            const where = text.fitStart(&label_buf, std.fs.path.dirname(row.path) orelse "", room);
+            app.font.draw(where, after, y, t.hint);
+        }
     }
 };
 

@@ -87,7 +87,8 @@ pub var window = Window{};
 pub var buffer = Buffer{};
 pub var input = Input{};
 pub var prompt = Prompt{};
-pub var recent = Recent{};
+pub var recent = Recent{ .file_name = "recent" };
+pub var recent_folders = Recent{ .file_name = "recent-folders" };
 pub var menu = Menu{};
 pub var browser = Browser{};
 pub var update = Update{};
@@ -119,6 +120,8 @@ pub fn run(start: Start) !void {
     defer prompt.deinit();
     recent.gpa = gpa;
     defer recent.deinit();
+    recent_folders.gpa = gpa;
+    defer recent_folders.deinit();
     browser.gpa = gpa;
     defer browser.deinit();
     find.gpa = gpa;
@@ -172,6 +175,7 @@ pub fn run(start: Start) !void {
         update.log.setDir(d);
         if (io) |active_io| {
             recent.load(active_io, d) catch {};
+            recent_folders.load(active_io, d) catch {};
             crash.setUp(active_io, d, version);
             crashed_last_time = crash.takeNew(active_io, d);
         }
@@ -192,6 +196,7 @@ pub fn run(start: Start) !void {
 
     defer if (data_dir) |d| if (io) |active_io| {
         recent.save(active_io, d) catch {};
+        recent_folders.save(active_io, d) catch {};
     };
 
     // Registered last so it runs first, while the buffers still exist.
@@ -250,8 +255,6 @@ fn saveSession(d: []const u8) void {
 /// Files named on the command line win; otherwise the last session comes
 /// back; failing both, an empty buffer so there is always somewhere to type.
 fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
-    // iterateAllocator rather than iterate: on Windows the plain one refuses,
-    // because the command line has to be decoded from WTF-16 first.
     // The last session comes back first, so text it holds unsaved is not
     // lost to a file named on the command line; those open on top.
     if (config.restore_session) if (session_dir) |dir| if (io) |active_io| {
@@ -262,6 +265,8 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
         }
     };
 
+    // iterateAllocator rather than iterate: on Windows the plain one refuses,
+    // because the command line has to be decoded from WTF-16 first.
     var args = try start.args.iterateAllocator(gpa);
     defer args.deinit();
     _ = args.next(); // program name
@@ -271,13 +276,11 @@ fn openStartingBuffers(start: Start, session_dir: ?[]const u8) !void {
     if (buffer.views.items.len > 0) return;
 
     // The web build has no files or session, so it opens a welcome text.
+    // Elsewhere, with nothing to open, the empty screen offers what to do.
     if (on_web) {
         _ = try buffer.newFilled("welcome.txt", welcome_data);
         web.fetch(sqlite_url, sqliteArrived);
-        return;
     }
-
-    _ = try buffer.newScratch();
 }
 
 fn sqliteArrived(bytes: []const u8) void {
@@ -314,6 +317,7 @@ pub fn openPath(path: []const u8) !void {
 
 pub fn openFolder(path: []const u8) !void {
     try workspace.open(io orelse return error.NoFilesystem, path);
+    if (workspace.root) |root| recent_folders.add(root) catch {};
     folder_search.stop();
     sidebar.forget();
     sidebar.shown = true;

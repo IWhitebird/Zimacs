@@ -7,7 +7,7 @@ const text_mod = @import("text.zig");
 const fuzzy = @import("fuzzy.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { open, open_folder, quick_open, search_folder, save_as, browse, save_into, goto_line };
+pub const Kind = enum { open, recent, open_folder, quick_open, search_folder, save_as, browse, save_into, goto_line };
 
 /// Case-insensitive substring test, for narrowing the suggestion list.
 fn contains(haystack: []const u8, needle: []const u8) bool {
@@ -183,6 +183,7 @@ pub const Prompt = struct {
     pub fn label(p: Self) []const u8 {
         return switch (p.kind) {
             .open => "Open: ",
+            .recent => "Open recent: ",
             .open_folder => "Open folder: ",
             .quick_open => "Go to file: ",
             .search_folder => "Search folder: ",

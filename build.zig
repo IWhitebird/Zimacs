@@ -49,6 +49,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/dialog.zig", .raylib = true },
     .{ .path = "src/core/theme.zig", .raylib = true },
     .{ .path = "src/core/layout.zig", .raylib = true },
+    .{ .path = "src/core/welcome.zig", .raylib = true },
 };
 
 pub fn build(b: *std.Build) void {

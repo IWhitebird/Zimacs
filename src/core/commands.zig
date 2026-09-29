@@ -36,7 +36,8 @@ pub fn run(action: Action) !void {
         .quick_open => try quickOpen(),
         .search_folder => try searchFolder(),
         .toggle_sidebar => toggleSidebar(),
-        .open_recent => try app.prompt.beginWith(.open, app.recent.items()),
+        .open_recent => try openRecent(),
+        .reopen_tab => if (!app.buffer.reopenClosed()) tell(.info, "No closed tab to reopen", .{}),
         .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
@@ -112,7 +113,7 @@ pub fn saveViewAs(view: *BufferView, path: []const u8) void {
     announceSave(view, outcome);
     const p = pending orelse return;
     if (p.view == view.id and p.then_close) {
-        if (app.buffer.indexOf(view)) |i| app.buffer.close(i) catch |err| report("Could not close", err);
+        if (app.buffer.indexOf(view)) |i| app.buffer.close(i);
     }
 }
 
@@ -179,9 +180,9 @@ pub fn answer(a: dialog_mod.Answer) !void {
         .save => if (view.path == null) {
             try browseToSave(true);
         } else if (saveView(view)) {
-            try app.buffer.close(index);
+            app.buffer.close(index);
         },
-        .discard => try app.buffer.close(index),
+        .discard => app.buffer.close(index),
         .reload => app.buffer.reload(view) catch |err| report("Could not reload", err),
         .keep => app.buffer.acknowledgeDisk(view),
         .cancel => {},
@@ -257,6 +258,24 @@ pub fn saveInBrowser(typed: []const u8) !void {
 }
 
 const desktop_only = "Folders need the desktop version of Zimacs";
+
+/// What Open Recent lists: the folders, each with a separator after it to
+/// tell it apart, then the files.
+var recent_choices: std.ArrayList([]const u8) = .empty;
+/// Holds `recent_choices` too, so both go at once. The web build's heap
+/// belongs to emscripten, so its allocator is libc's.
+var recent_labels = std.heap.ArenaAllocator.init(if (app.on_web) std.heap.c_allocator else std.heap.page_allocator);
+
+fn openRecent() !void {
+    _ = recent_labels.reset(.retain_capacity);
+    recent_choices = .empty;
+    const a = recent_labels.allocator();
+    for (app.recent_folders.items()) |folder| {
+        try recent_choices.append(a, try std.fmt.allocPrint(a, "{s}{c}", .{ folder, std.fs.path.sep }));
+    }
+    for (app.recent.items()) |file| try recent_choices.append(a, file);
+    try app.prompt.beginWith(.recent, recent_choices.items);
+}
 
 /// Whether a folder is open, saying how to open one when it is not.
 fn folderOpen() bool {
