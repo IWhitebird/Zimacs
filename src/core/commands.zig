@@ -28,6 +28,7 @@ const comment = @import("comment.zig");
 const updatelog = @import("updatelog.zig");
 const wikilink = @import("wikilink.zig");
 const editor = @import("editor.zig");
+const mcp = @import("mcp.zig");
 
 pub fn run(action: Action) !void {
     switch (action) {
@@ -35,6 +36,7 @@ pub fn run(action: Action) !void {
         .open_file => try browse(null),
         .open_folder => try chooseFolder(),
         .close_folder => app.closeFolder(),
+        .open_memory => openMemory(),
         .quick_open => try quickOpen(),
         .search_folder => try searchFolder(),
         .toggle_sidebar => toggleSidebar(),
@@ -46,6 +48,7 @@ pub fn run(action: Action) !void {
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
         .report_problem => reportProblem(),
+        .copy_mcp_command => copyMcpCommand(),
         .about => app.menu.showing_about = true,
 
         .save => try save(),
@@ -389,11 +392,38 @@ const no_backlinks = "No notes link here";
 /// hides it again.
 fn toggleGraph() void {
     if (app.graph.shown) return app.graph.hide();
+    showGraph();
+}
+
+fn showGraph() void {
     if (!folderOpen()) return;
     const view = app.buffer.current();
     const path = if (view) |v| if (v.path) |p| app.workspace.relativeOf(p) else null else null;
     app.graph.show(path, editor.currentLayout().body()) catch |err| return report("Could not draw the graph", err);
     app.workspace.refresh(app.io.?);
+}
+
+/// Opens the folder `Zimacs mcp` keeps notes in when given none, with its
+/// graph, to see what agents have written there.
+fn openMemory() void {
+    const dir = app.data_dir orelse return tell(.info, desktop_only, .{});
+    const io = app.io orelse return;
+    const folder = std.fs.path.join(app.gpa, &.{ dir, mcp.memory_folder }) catch |err| return report("Could not open the memory folder", err);
+    defer app.gpa.free(folder);
+    std.Io.Dir.cwd().createDirPath(io, folder) catch |err| return report("Could not make the memory folder", err);
+    app.openFolder(folder) catch |err| return report("Could not open the memory folder", err);
+    showGraph();
+}
+
+/// Copies the command that gives Claude Code this editor's notes tools.
+fn copyMcpCommand() void {
+    const io = app.io orelse return tell(.info, desktop_only, .{});
+    const exe = std.process.executablePathAlloc(io, app.gpa) catch |err| return report("Could not find Zimacs itself", err);
+    defer app.gpa.free(exe);
+    const command = std.fmt.allocPrintSentinel(app.gpa, "claude mcp add --scope user zimacs -- \"{s}\" mcp", .{exe}, 0) catch return;
+    defer app.gpa.free(command);
+    pen.setClipboardText(command);
+    tell(.info, "Copied: {s}", .{command});
 }
 
 /// Opens the note of dot `index` in the graph, making it first if it is one

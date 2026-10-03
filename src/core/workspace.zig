@@ -22,7 +22,7 @@ pub const max_files = 200_000;
 const binary_probe = 8000;
 
 /// The files of one walk, all allocated in its arena.
-const Listing = struct {
+pub const Listing = struct {
     arena: std.heap.ArenaAllocator,
     /// Relative to the root, with `/` between folders, sorted.
     files: []const []const u8 = &.{},
@@ -32,7 +32,17 @@ const Listing = struct {
     notes: notes_mod.Graph = .{},
     /// Which opening of a folder it belongs to.
     generation: u32,
+
+    pub fn destroy(l: *Listing, gpa: Allocator) void {
+        free(gpa, l);
+    }
 };
+
+/// Lists `root` and reads its notes there and then, for a caller that can
+/// wait. Destroy the listing when done.
+pub fn scan(gpa: Allocator, io: std.Io, root: []const u8) !*Listing {
+    return walk(gpa, io, root, 0);
+}
 
 pub const Workspace = struct {
     gpa: Allocator,

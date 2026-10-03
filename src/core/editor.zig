@@ -746,6 +746,11 @@ pub const Editor = struct {
         pen.beginScissorMode(@intFromFloat(area.x), @intFromFloat(area.y), @intFromFloat(area.width), @intFromFloat(area.height));
         defer pen.endScissorMode();
 
+        if (g.nodes.items.len == 0) {
+            const width = app.font.widthOf(no_notes);
+            app.font.draw(no_notes, area.x + (area.width - width) / 2, area.y + (area.height - app.font.metrics.height) / 2, t.hint);
+            return;
+        }
         const current = currentNote();
         for (g.edges.items) |edge| {
             const lit = g.hovered != null and (g.hovered == edge.from or g.hovered == edge.to);
@@ -1005,6 +1010,7 @@ const graph_line = 1;
 const graph_lit_line = 1.5;
 /// Longer note names are not labelled.
 const graph_label_bytes = 256;
+const no_notes = "No Markdown notes in this folder yet";
 
 /// `r` larger all round, so a dot just past an edge still draws its part.
 fn grown(r: pen.Rectangle, by: f32) pen.Rectangle {

@@ -15,6 +15,7 @@ pub const Action = enum {
     open_file,
     open_folder,
     close_folder,
+    open_memory,
     quick_open,
     search_folder,
     open_recent,
@@ -56,6 +57,7 @@ pub const Action = enum {
     open_config,
     check_updates,
     report_problem,
+    copy_mcp_command,
     about,
 };
 
@@ -79,6 +81,7 @@ pub const bar = [_]Group{
         .{ .label = "Open Folder...", .shortcut = "Ctrl+Shift+O", .action = .open_folder },
         .{ .label = "Go to File...", .shortcut = "Ctrl+P", .action = .quick_open },
         .{ .label = "Close Folder", .action = .close_folder },
+        .{ .label = "Open Memory Folder", .action = .open_memory },
         .{ .label = "Open Recent", .shortcut = "Ctrl+R", .action = .open_recent },
         .{ .label = "Reopen Closed Tab", .shortcut = "Ctrl+Shift+T", .action = .reopen_tab },
         .{ .label = "Save", .shortcut = "Ctrl+S", .action = .save },
@@ -121,6 +124,7 @@ pub const bar = [_]Group{
         .{ .label = "Edit Settings", .shortcut = "Ctrl+,", .action = .open_config },
         .{ .label = "Check for Updates", .action = .check_updates },
         .{ .label = "Report a Problem", .action = .report_problem },
+        .{ .label = "Copy MCP Command", .action = .copy_mcp_command },
         .{ .label = "About Zimacs", .action = .about },
     } },
 };

@@ -44,6 +44,19 @@ pub const Graph = struct {
         return .{ .notes = b.notes.items, .edges = b.edges.items };
     }
 
+    /// The note with a file that `target`, as a link would write it, means.
+    pub fn named(g: Graph, target: []const u8) ?u32 {
+        var buf: [max_target]u8 = undefined;
+        const clean = wikilink.normalise(target, &buf);
+        var best: ?u32 = null;
+        for (g.notes, 0..) |n, i| {
+            const path = n.path orelse continue;
+            if (!wikilink.matches(path, clean)) continue;
+            if (best == null or wikilink.preferred(path, g.notes[best.?].path.?, "")) best = @intCast(i);
+        }
+        return best;
+    }
+
     /// The note kept in the file at `path`, relative to the folder.
     pub fn find(g: Graph, path: []const u8) ?u32 {
         for (g.notes, 0..) |n, i| if (n.path) |p| if (std.mem.eql(u8, p, path)) return @intCast(i);
@@ -150,4 +163,8 @@ test "notes link to each other, to names with no file yet, but not to other file
     defer back.deinit(testing.allocator);
     try g.backlinks(testing.allocator, g.find("Alpha.md").?, &back);
     try testing.expectEqualSlices(u32, &.{1}, back.items);
+
+    try testing.expectEqual(@as(?u32, 1), g.named("ada"));
+    try testing.expectEqual(@as(?u32, 1), g.named("people/Ada.md"));
+    try testing.expect(g.named("Plans") == null);
 }

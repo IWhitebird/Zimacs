@@ -2,6 +2,7 @@ const std = @import("std");
 const zimacs = @import("zimacs.zig");
 const browser_calls = @import("core/web.zig");
 const crash = @import("core/crash.zig");
+const mcp = @import("core/mcp.zig");
 
 /// Panics on the web go to the browser console.
 ///
@@ -53,6 +54,19 @@ else
 pub const main = if (zimacs.on_web) web else native;
 
 fn native(process: std.process.Init) !void {
+    // `Zimacs mcp [folder]` serves notes to an AI agent instead of opening
+    // a window.
+    var args = try process.minimal.args.iterateAllocator(process.gpa);
+    defer args.deinit();
+    _ = args.next();
+    if (args.next()) |first| if (std.mem.eql(u8, first, "mcp")) {
+        mcp.run(process.gpa, process.io, process.environ_map, args.next(), zimacs.version) catch |err| {
+            std.debug.print("Zimacs could not serve notes: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        return;
+    };
+
     zimacs.run(.{
         .args = process.minimal.args,
         .io = process.io,

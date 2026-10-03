@@ -33,6 +33,42 @@ refused. Set `auto_update = false` in the settings to turn this off.
 `Help → Edit Settings`, or `Ctrl+,`. The file lives in `~/.config/zimacs`
 on Linux and `%APPDATA%\zimacs` on Windows.
 
+## Notes
+
+Open a folder of Markdown files with `File → Open Folder`. In a note:
+
+- `[[name]]` links to another note. `Ctrl+click` follows the link, and
+  makes the note if it does not exist yet. Typing `[[` lists the notes.
+- `View → Backlinks` (`Ctrl+Shift+B`) lists the notes that link to it.
+- `View → Graph` (`Ctrl+Shift+G`) shows the notes and their links as a
+  graph. Click a dot to open its note.
+
+Markdown links to notes, `[text](note.md)`, count as links too.
+
+## AI agents
+
+`zimacs mcp [folder]` runs an [MCP](https://modelcontextprotocol.io)
+server over standard input and output. Its tools list, read, write,
+search and follow the notes in the folder, so an agent can keep its memory
+there as linked notes. The graph updates as the agent writes.
+
+Without a folder it uses `~/.local/share/zimacs/memory` on Linux and
+`%LOCALAPPDATA%\zimacs\memory` on Windows. `File → Open Memory Folder`
+opens it with its graph.
+
+For Claude Code:
+
+```sh
+claude mcp add --scope user zimacs -- zimacs mcp
+```
+
+`Help → Copy MCP Command` copies this with the full path to Zimacs. For
+agents set up with a JSON file:
+
+```json
+{ "mcpServers": { "zimacs": { "command": "zimacs", "args": ["mcp"] } } }
+```
+
 ## Build
 
 Needs [Zig 0.16.0](https://ziglang.org/download/).
