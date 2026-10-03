@@ -35,6 +35,7 @@ pub fn pace() void {
 /// while a file is still being parsed.
 fn busy() bool {
     if (pen.isMouseButtonDown(.left) or pen.isMouseButtonDown(.right) or pen.isMouseButtonDown(.middle)) return true;
+    if (app.graph.moving()) return true;
     // Parsing runs a slice per frame until it catches up with the text.
     const view = app.buffer.current() orelse return false;
     const s = view.syntax orelse return false;

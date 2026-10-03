@@ -38,6 +38,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/fuzzy.zig", .raylib = false },
     .{ .path = "src/core/wikilink.zig", .raylib = false },
     .{ .path = "src/core/notes.zig", .raylib = false },
+    .{ .path = "src/core/forcelayout.zig", .raylib = false },
     .{ .path = "src/core/foldersearch.zig", .raylib = false },
     .{ .path = "src/core/syntax.zig", .raylib = false },
     .{ .path = "src/core/comment.zig", .raylib = false },
@@ -52,6 +53,7 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/theme.zig", .raylib = true },
     .{ .path = "src/core/layout.zig", .raylib = true },
     .{ .path = "src/core/welcome.zig", .raylib = true },
+    .{ .path = "src/core/graph.zig", .raylib = true },
 };
 
 pub fn build(b: *std.Build) void {

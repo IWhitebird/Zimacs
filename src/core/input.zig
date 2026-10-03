@@ -79,6 +79,7 @@ pub const Input = struct {
             return;
         }
         if (try handleMenu()) return;
+        if (app.graph.shown) return graphInput();
         try shortcuts();
         try repeatSearch();
         moveCursor();
@@ -536,7 +537,7 @@ fn windowShortcuts() !void {
     if (pressed(.r)) try commands.run(.open_recent);
     if (pressed(.f)) try commands.run(if (shift) .search_folder else .find);
     if (pressed(.h)) try commands.run(.replace);
-    if (pressed(.g)) try commands.run(.goto_line);
+    if (pressed(.g)) try commands.run(if (shift) .graph_view else .goto_line);
     if (pressed(.s)) try commands.run(if (shift) .save_as else .save);
     if (pressed(.comma)) try commands.run(.open_config);
 }
@@ -601,6 +602,7 @@ fn mouse() !void {
         }
         if (app.editor.tabs.tabAt(l.tabs, point)) |index| {
             app.buffer.select(index);
+            app.graph.hide();
             return;
         }
         // A scrollbar only takes the press when it actually has a thumb.
@@ -651,6 +653,27 @@ fn mouse() !void {
             if (point.y > l.text.y + l.text.height) app.editor.scroll(1);
         },
     }
+}
+
+/// The graph view takes the pointer over the area under the tabs: hovering
+/// picks out a dot, dragging moves a dot or the view, the wheel zooms, and a
+/// click opens a note. The tabs and the folder tree work as usual.
+fn graphInput() !void {
+    try windowShortcuts();
+    if (pressed(.escape)) return app.graph.hide();
+    const g = &app.graph;
+    const area = editor.currentLayout().body();
+    const point = pen.getMousePosition();
+    g.hover(point, area);
+    if (g.gesture != .none) {
+        if (pen.isMouseButtonDown(.left)) return g.drag(point, area);
+        if (g.release()) |index| commands.openGraphNode(index);
+        return;
+    }
+    if (!pen.checkCollisionPointRec(point, area)) return mouse();
+    const wheel = pen.getMouseWheelMove();
+    if (wheel != 0) g.zoomAt(point, area, wheel);
+    if (pen.isMouseButtonPressed(.left)) g.press(point, area);
 }
 
 /// Ctrl+click on a `[[link]]` in a note follows it. True when there was one.

@@ -87,6 +87,12 @@ pub const Layout = struct {
         };
     }
 
+    /// Everything under the tabs: gutter, text and scrollbar, which the
+    /// graph view takes over.
+    pub fn body(l: Layout) pen.Rectangle {
+        return .{ .x = l.gutter.x, .y = l.text.y, .width = l.scrollbar.x + l.scrollbar.width - l.gutter.x, .height = l.text.height };
+    }
+
     /// How many whole lines fit in the text area.
     pub fn rows(l: Layout, cell: Metrics) u32 {
         const n = @floor(l.text.height / cell.height);

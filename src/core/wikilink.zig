@@ -1,12 +1,13 @@
-//! Links between notes, written `[[name]]` as in Obsidian: finding them in
-//! Markdown and working out which file each one means.
+//! Links between notes, written `[[name]]` as in Obsidian or as Markdown's
+//! `[text](note.md)`: finding them and working out which file each means.
 
 const std = @import("std");
 
 pub const Link = struct {
-    /// What it points to, without any `|alias` or `#heading`.
+    /// What it points to, without any `|alias` or `#heading`. Pass it
+    /// through `normalise` before resolving it.
     target: []const u8,
-    /// Where the whole `[[...]]` starts and ends.
+    /// Where the whole link starts and ends.
     start: usize,
     end: usize,
 };
@@ -65,9 +66,8 @@ fn scan(text: []const u8, from: usize, end: usize) ?Link {
             '\\' => i += 2,
             '`' => i = pastCodeSpan(text, i, end),
             '[' => {
-                if (i + 1 < end and text[i + 1] == '[') {
-                    if (linkAt(text, i, end)) |link| return link;
-                }
+                const found = if (i + 1 < end and text[i + 1] == '[') linkAt(text, i, end) else markdownLinkAt(text, i, end);
+                if (found) |link| return link;
                 i += 1;
             },
             else => i += 1,
@@ -105,6 +105,47 @@ fn linkAt(text: []const u8, start: usize, end: usize) ?Link {
     // `[[#heading]]` points into the same note.
     if (target.len == 0) return null;
     return .{ .target = target, .start = start, .end = close + 2 };
+}
+
+/// `[text](path.md)` to another note; links to anything else are not ones
+/// between notes.
+fn markdownLinkAt(text: []const u8, start: usize, end: usize) ?Link {
+    const close = std.mem.findAnyPos(u8, text[0..end], start + 1, "[]") orelse return null;
+    if (text[close] != ']' or close + 1 >= end or text[close + 1] != '(') return null;
+    const paren = std.mem.findScalarPos(u8, text[0..end], close + 2, ')') orelse return null;
+    var dest = std.mem.trim(u8, text[close + 2 .. paren], " \t");
+    if (dest.len >= 2 and dest[0] == '<' and dest[dest.len - 1] == '>') dest = dest[1 .. dest.len - 1];
+    if (std.mem.find(u8, dest, "://") != null or std.mem.startsWith(u8, dest, "mailto:")) return null;
+    dest = dest[0 .. std.mem.findScalar(u8, dest, '#') orelse dest.len];
+    if (!isNote(dest)) return null;
+    return .{ .target = dest, .start = start, .end = paren + 1 };
+}
+
+/// A target as written, with `%20` and the like decoded and any leading
+/// `./` or `../` dropped, which resolving by name has no use for. Uses
+/// `buf` when it must change it.
+pub fn normalise(target: []const u8, buf: []u8) []const u8 {
+    var t = target;
+    if (std.mem.findScalar(u8, t, '%') != null and t.len <= buf.len) {
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < t.len) : (n += 1) {
+            if (t[i] == '%' and i + 2 < t.len) {
+                if (std.fmt.parseInt(u8, t[i + 1 .. i + 3], 16)) |byte| {
+                    buf[n] = byte;
+                    i += 3;
+                    continue;
+                } else |_| {}
+            }
+            buf[n] = t[i];
+            i += 1;
+        }
+        t = buf[0..n];
+    }
+    while (true) {
+        if (std.mem.startsWith(u8, t, "./")) t = t[2..] else if (std.mem.startsWith(u8, t, "../")) t = t[3..] else break;
+    }
+    return t;
 }
 
 /// A path or link target, without the note extension, to compare by.
@@ -194,6 +235,20 @@ test "code, broken brackets and links into the same note are not links" {
     ;
     try targets(text, &out);
     try testing.expectEqualStrings("real|after|", out.items);
+}
+
+test "Markdown links to notes count, links to pages and pictures do not" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    try targets("[One](one.md) [web](https://x.org/a.md) ![pic](p.png) [Two](<sub/two.md#part>) [plain] text", &out);
+    try testing.expectEqualStrings("one.md|sub/two.md|", out.items);
+}
+
+test "targets lose their escapes and leading folders" {
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("my note.md", normalise("./my%20note.md", &buf));
+    try testing.expectEqualStrings("x/100%.md", normalise("../x/100%.md", &buf));
+    try testing.expectEqualStrings("plain", normalise("plain", &buf));
 }
 
 test "the link under a position is found" {

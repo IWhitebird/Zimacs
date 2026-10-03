@@ -101,14 +101,17 @@ pub const Editor = struct {
 
         drawSidebar(l, cell);
         const view = app.buffer.current();
-        if (view) |v| {
+        if (app.graph.shown) {
+            drawGraph(l);
+            if (view != null) try e.drawTabs(l);
+        } else if (view) |v| {
             try e.follow(v, l, cell);
             try e.drawText(v, l, cell);
             try e.drawGutter(v, l, cell);
             drawScrollbars(v, l, cell);
             try e.drawTabs(l);
         } else drawWelcome(l, cell);
-        try e.drawStatus(view, l, cell);
+        try e.drawStatus(if (app.graph.shown) null else view, l, cell);
         try e.drawPrompt(l, cell);
         try drawFindBar(l, cell);
         // Last, so the dropdown and the About panel sit over everything else.
@@ -638,12 +641,13 @@ pub const Editor = struct {
             right_x -= layout.padding * 3;
         }
 
-        const v = view orelse return;
         e.status.clearRetainingCapacity();
-        try e.status.print(app.gpa, "{s}{s}", .{
-            v.path orelse v.name,
-            if (v.edited()) " *" else "",
-        });
+        if (app.graph.shown) {
+            try e.status.print(app.gpa, "{d} notes, {d} links", .{ app.graph.nodes.items.len, app.graph.edges.items.len });
+        } else {
+            const v = view orelse return;
+            try e.status.print(app.gpa, "{s}{s}", .{ v.path orelse v.name, if (v.edited()) " *" else "" });
+        }
         pen.beginScissorMode(
             @intFromFloat(l.status.x),
             @intFromFloat(l.status.y),
@@ -730,6 +734,47 @@ pub const Editor = struct {
                 if (hot) theme.current.tab_text_active else theme.current.status_text,
             );
         }
+    }
+
+    /// The folder's notes as dots and their links as lines. The note in
+    /// front, and the dot under the pointer with its neighbours, stand out.
+    fn drawGraph(l: Layout) void {
+        const g = &app.graph;
+        const t = theme.current;
+        const area = l.body();
+        pen.drawRectangleRec(area, t.background);
+        pen.beginScissorMode(@intFromFloat(area.x), @intFromFloat(area.y), @intFromFloat(area.width), @intFromFloat(area.height));
+        defer pen.endScissorMode();
+
+        const current = currentNote();
+        for (g.edges.items) |edge| {
+            const lit = g.hovered != null and (g.hovered == edge.from or g.hovered == edge.to);
+            pen.drawLineEx(g.dot(edge.from, area), g.dot(edge.to, area), if (lit) graph_lit_line else graph_line, if (lit) t.syntax_tag else t.scrollbar);
+        }
+        for (g.nodes.items, 0..) |node, n| {
+            const i: u32 = @intCast(n);
+            const at = g.dot(i, area);
+            const r = g.radius(i);
+            if (!pen.checkCollisionPointRec(at, grown(area, r))) continue;
+            const colour = if (current == i) t.caret else if (g.lit.items[i]) t.syntax_tag else if (node.missing()) t.gutter_text else t.gutter_text_active;
+            pen.drawCircleV(at, r, colour);
+        }
+        var buf: [graph_label_bytes]u8 = undefined;
+        for (g.nodes.items, 0..) |node, n| {
+            const i: u32 = @intCast(n);
+            if (!g.labelled(i)) continue;
+            const at = g.dot(i, area);
+            if (!pen.checkCollisionPointRec(at, area)) continue;
+            const label = std.fmt.bufPrintZ(&buf, "{s}", .{node.name()}) catch continue;
+            const x = at.x - app.font.widthOf(label) / 2;
+            app.font.draw(label, x, at.y + g.radius(i) + layout.padding / 2, if (g.lit.items[i]) t.text else t.gutter_text);
+        }
+    }
+
+    /// The graph's dot for the note in front, if it is one.
+    fn currentNote() ?u32 {
+        const view = app.buffer.current() orelse return null;
+        return app.graph.find(app.workspace.relativeOf(view.path orelse return null) orelse return null);
     }
 
     /// With no tab open: buttons to start, and what was opened lately.
@@ -955,6 +1000,16 @@ var about_storage: [about_capacity][160]u8 = undefined;
 
 /// Room for the prompt's line once fitted to the panel.
 const prompt_line_capacity = 2048;
+/// Graph lines, and the ones of the dot under the pointer, in pixels.
+const graph_line = 1;
+const graph_lit_line = 1.5;
+/// Longer note names are not labelled.
+const graph_label_bytes = 256;
+
+/// `r` larger all round, so a dot just past an edge still draws its part.
+fn grown(r: pen.Rectangle, by: f32) pen.Rectangle {
+    return .{ .x = r.x - by, .y = r.y - by, .width = r.width + by * 2, .height = r.height + by * 2 };
+}
 
 fn drawAbout(l: Layout, cell: Metrics) void {
     var lines: [about_capacity][:0]const u8 = undefined;

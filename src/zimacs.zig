@@ -43,6 +43,7 @@ const FileDialog = @import("core/filedialog.zig").Dialog;
 const Workspace = @import("core/workspace.zig").Workspace;
 const Sidebar = @import("core/sidebar.zig").Sidebar;
 const FolderSearch = @import("core/foldersearch.zig").FolderSearch;
+const GraphView = @import("core/graph.zig").GraphView;
 const native = @import("core/native.zig");
 
 const leak_checks = builtin.mode == .Debug;
@@ -99,6 +100,7 @@ pub var file_dialog = FileDialog{};
 pub var workspace = Workspace{ .gpa = gpa, .on_listed = native.wake };
 pub var sidebar = Sidebar{ .gpa = gpa };
 pub var folder_search = FolderSearch{ .gpa = gpa, .on_found = native.wake };
+pub var graph = GraphView.init(gpa);
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
@@ -129,6 +131,7 @@ pub fn run(start: Start) !void {
     defer workspace.deinit();
     defer sidebar.deinit();
     defer folder_search.deinit();
+    defer graph.deinit();
     defer if (config_path) |p| gpa.free(p);
 
     const config_failure = loadConfig(start);
@@ -212,6 +215,8 @@ pub fn run(start: Start) !void {
         if (update_schedule.due(pen.getTime(), &update)) commands.updateInBackground();
         if (file_dialog.take()) |outcome| commands.finishFileDialog(outcome);
         if (workspace.poll()) commands.folderListed();
+        if (graph.wantsRescan(pen.getTime())) if (io) |active_io| workspace.refresh(active_io);
+        graph.tick() catch |err| reportFrameError("Graph", err);
         if (folder_search.poll()) commands.folderSearched();
         // Before drawing, because resizing the canvas clears it.
         window_mod.fitToCanvas();
@@ -325,6 +330,7 @@ pub fn openFolder(path: []const u8) !void {
 }
 
 pub fn closeFolder() void {
+    graph.hide();
     folder_search.stop();
     workspace.close();
     sidebar.forget();
@@ -339,6 +345,7 @@ pub fn refreshSidebar() void {
 
 pub fn openFile(path: []const u8) !void {
     try buffer.openOrSelect(path);
+    graph.hide();
     // As the buffer stored it: absolute, so it means the same file later.
     if (buffer.current()) |view| if (view.path) |stored| recent.add(stored) catch {};
 }

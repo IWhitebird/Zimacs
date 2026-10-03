@@ -80,8 +80,10 @@ const Builder = struct {
 
     /// The note `target`, linked from `from`, means; a new one standing for
     /// it if no file has it. Null for a link to some other kind of file.
-    fn noteFor(b: *Builder, target: []const u8, from: []const u8) !?u32 {
-        if (target.len > max_target) return null;
+    fn noteFor(b: *Builder, written: []const u8, from: []const u8) !?u32 {
+        if (written.len > max_target) return null;
+        var clean_buf: [max_target]u8 = undefined;
+        const target = wikilink.normalise(written, &clean_buf);
         var buf: [max_target]u8 = undefined;
         const lower = std.ascii.lowerString(&buf, wikilink.key(target));
         const name = std.fs.path.basenamePosix(lower);
@@ -130,7 +132,7 @@ test "notes link to each other, to names with no file yet, but not to other file
     defer arena.deinit();
     const files = [_][]const u8{ "Alpha.md", "img/pic.png", "people/Ada.md", "src/main.zig" };
     const texts = Texts{ .map = &.{
-        .{ "Alpha.md", "Met [[Ada]] about [[Plans]], see ![[pic.png]], [[Ada|again]], [[Alpha]]." },
+        .{ "Alpha.md", "Met [[Ada]] about [[Plans]], see ![[pic.png]], [Ada](people/Ada.md), [[Alpha]]." },
         .{ "people/Ada.md", "Works on [[plans]] and [[Alpha]]." },
     } };
     const g = try Graph.build(arena.allocator(), &files, texts);

@@ -27,6 +27,7 @@ const foldersearch = @import("foldersearch.zig");
 const comment = @import("comment.zig");
 const updatelog = @import("updatelog.zig");
 const wikilink = @import("wikilink.zig");
+const editor = @import("editor.zig");
 
 pub fn run(action: Action) !void {
     switch (action) {
@@ -40,6 +41,7 @@ pub fn run(action: Action) !void {
         .open_recent => try openRecent(),
         .reopen_tab => if (!app.buffer.reopenClosed()) tell(.info, "No closed tab to reopen", .{}),
         .backlinks => try showBacklinks(),
+        .graph_view => toggleGraph(),
         .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
@@ -298,10 +300,11 @@ fn isFolderNote(view: *const BufferView) bool {
 }
 
 /// Opens the note a link names, first making it if no file has it yet.
-pub fn followLink(view: *const BufferView, target: []const u8) void {
+pub fn followLink(view: *const BufferView, written: []const u8) void {
     const io = app.io orelse return;
     const from = view.path orelse return tell(.info, "Save the note before following its links", .{});
-    const path = linkedPath(from, target) catch |err| return report("Could not follow the link", err);
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path = linkedPath(from, wikilink.normalise(written, &buf)) catch |err| return report("Could not follow the link", err);
     defer app.gpa.free(path);
     createNote(io, path) catch |err| return report("Could not make the note", err);
     app.openFile(path) catch |err| report("Could not open", err);
@@ -382,6 +385,31 @@ fn showBacklinks() !void {
 
 const no_backlinks = "No notes link here";
 
+/// Shows the folder's notes as a graph, centred on the one in front, or
+/// hides it again.
+fn toggleGraph() void {
+    if (app.graph.shown) return app.graph.hide();
+    if (!folderOpen()) return;
+    const view = app.buffer.current();
+    const path = if (view) |v| if (v.path) |p| app.workspace.relativeOf(p) else null else null;
+    app.graph.show(path, editor.currentLayout().body()) catch |err| return report("Could not draw the graph", err);
+    app.workspace.refresh(app.io.?);
+}
+
+/// Opens the note of dot `index` in the graph, making it first if it is one
+/// links name but no file has yet.
+pub fn openGraphNode(index: u32) void {
+    const io = app.io orelse return;
+    const node = app.graph.nodes.items[index];
+    if (node.path()) |p| return openInFolder(p);
+    const made = wikilink.newNotePath(app.gpa, node.name(), "") catch |err| return report("Could not make the note", err);
+    defer app.gpa.free(made);
+    const path = app.workspace.absolute(app.gpa, made) catch |err| return report("Could not make the note", err);
+    defer app.gpa.free(path);
+    createNote(io, path) catch |err| return report("Could not make the note", err);
+    app.openFile(path) catch |err| report("Could not open", err);
+}
+
 /// Whether a folder is open, saying how to open one when it is not.
 fn folderOpen() bool {
     if (app.io == null) {
@@ -405,6 +433,7 @@ fn quickOpen() !void {
 
 /// A new listing of the folder is in; the old one's names are gone.
 pub fn folderListed() void {
+    app.graph.sync(app.workspace.notes()) catch |err| report("Could not draw the graph", err);
     if (!app.prompt.active) return;
     switch (app.prompt.kind) {
         .quick_open => app.prompt.replaceOptions(app.workspace.files()) catch app.prompt.cancel(),
@@ -653,6 +682,7 @@ pub fn checked(action: Action) bool {
     return switch (action) {
         .toggle_wrap => app.config.wrap_lines,
         .toggle_sidebar => app.sidebar.shown and app.workspace.root != null,
+        .graph_view => app.graph.shown,
         else => false,
     };
 }
