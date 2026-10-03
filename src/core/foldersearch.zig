@@ -7,13 +7,12 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
 const search = @import("search.zig");
+const Reader = @import("workspace.zig").Reader;
 
 /// Enough to be useful; past it the query wants narrowing.
 pub const max_hits = 1000;
 /// Larger files are skipped: they are logs and data, not source.
 const max_file_bytes = 4 * 1024 * 1024;
-/// A zero byte in this much of the start marks a file as binary.
-const binary_probe = 8000;
 /// How much of a line a hit shows.
 const max_shown_line = 200;
 
@@ -170,13 +169,13 @@ fn collect(s: *const FolderSearch, io: std.Io, job: *const Job) !*Results {
 
     var found: std.ArrayList(Hit) = .empty;
     var labels: std.ArrayList([]const u8) = .empty;
-    var read_buf: std.ArrayList(u8) = .empty;
-    defer read_buf.deinit(s.gpa);
+    var reader = Reader{ .gpa = s.gpa, .io = io, .root = job.root, .limit = max_file_bytes };
+    defer reader.deinit();
 
     for (job.files) |path| {
         // A newer query has taken over.
         if (job.generation != s.generation.load(.acquire)) break;
-        const text = unsavedText(job, path) orelse (readText(s.gpa, io, job.root, path, &read_buf) orelse continue);
+        const text = unsavedText(job, path) orelse (reader.text(path) orelse continue);
         var line: u32 = 0;
         var line_start: usize = 0;
         var counted: usize = 0;
@@ -209,18 +208,6 @@ fn collect(s: *const FolderSearch, io: std.Io, job: *const Job) !*Results {
 fn unsavedText(job: *const Job, path: []const u8) ?[]const u8 {
     for (job.unsaved) |u| if (std.mem.eql(u8, u.path, path)) return u.text;
     return null;
-}
-
-/// The file's text, or null when it cannot be read, is too large, or looks
-/// binary. Valid until the next call.
-fn readText(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8, buf: *std.ArrayList(u8)) ?[]const u8 {
-    var full_buf: [Dir.max_path_bytes]u8 = undefined;
-    const full = std.fmt.bufPrint(&full_buf, "{s}/{s}", .{ root, path }) catch return null;
-    const bytes = Dir.cwd().readFileAlloc(io, full, gpa, .limited(max_file_bytes)) catch return null;
-    buf.deinit(gpa);
-    buf.* = .fromOwnedSlice(bytes);
-    if (std.mem.findScalar(u8, bytes[0..@min(bytes.len, binary_probe)], 0) != null) return null;
-    return bytes;
 }
 
 // ---------------------------------------------------------------- tests

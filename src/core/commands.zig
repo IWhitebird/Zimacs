@@ -26,6 +26,7 @@ const filedialog = @import("filedialog.zig");
 const foldersearch = @import("foldersearch.zig");
 const comment = @import("comment.zig");
 const updatelog = @import("updatelog.zig");
+const wikilink = @import("wikilink.zig");
 
 pub fn run(action: Action) !void {
     switch (action) {
@@ -38,6 +39,7 @@ pub fn run(action: Action) !void {
         .toggle_sidebar => toggleSidebar(),
         .open_recent => try openRecent(),
         .reopen_tab => if (!app.buffer.reopenClosed()) tell(.info, "No closed tab to reopen", .{}),
+        .backlinks => try showBacklinks(),
         .close_tab => try requestClose(app.buffer.active),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
@@ -101,7 +103,7 @@ fn saveView(view: *BufferView) bool {
         report("Could not save", err);
         return false;
     };
-    announceSave(view, outcome);
+    afterSave(view, outcome);
     return true;
 }
 
@@ -110,7 +112,7 @@ pub fn saveViewAs(view: *BufferView, path: []const u8) void {
     const pending = pending_save;
     pending_save = null;
     const outcome = app.buffer.saveAs(view, path) catch |err| return report("Could not save", err);
-    announceSave(view, outcome);
+    afterSave(view, outcome);
     const p = pending orelse return;
     if (p.view == view.id and p.then_close) {
         if (app.buffer.indexOf(view)) |i| app.buffer.close(i);
@@ -131,10 +133,12 @@ pub fn cancelSave() void {
     pending_save = null;
 }
 
-fn announceSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
+fn afterSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
     if (outcome == .switched_to_utf8) {
         tell(.problem, "Saved {s} as UTF-8: it has characters its old encoding cannot hold", .{view.name});
     }
+    // Its links may have changed.
+    if (isFolderNote(view)) app.workspace.refresh(app.io.?);
 }
 
 // ------------------------------------------------------- file dialogs
@@ -259,23 +263,124 @@ pub fn saveInBrowser(typed: []const u8) !void {
 
 const desktop_only = "Folders need the desktop version of Zimacs";
 
-/// What Open Recent lists: the folders, each with a separator after it to
-/// tell it apart, then the files.
-var recent_choices: std.ArrayList([]const u8) = .empty;
-/// Holds `recent_choices` too, so both go at once. The web build's heap
-/// belongs to emscripten, so its allocator is libc's.
-var recent_labels = std.heap.ArenaAllocator.init(if (app.on_web) std.heap.c_allocator else std.heap.page_allocator);
+/// A list commands build for the prompt to offer, such as Open Recent's.
+/// One prompt is open at a time, so they share it.
+var choices: std.ArrayList([]const u8) = .empty;
+/// Holds `choices` too, so both go at once. The web build's heap belongs
+/// to emscripten, so its allocator is libc's.
+var choice_arena = std.heap.ArenaAllocator.init(if (app.on_web) std.heap.c_allocator else std.heap.page_allocator);
 
-fn openRecent() !void {
-    _ = recent_labels.reset(.retain_capacity);
-    recent_choices = .empty;
-    const a = recent_labels.allocator();
-    for (app.recent_folders.items()) |folder| {
-        try recent_choices.append(a, try std.fmt.allocPrint(a, "{s}{c}", .{ folder, std.fs.path.sep }));
-    }
-    for (app.recent.items()) |file| try recent_choices.append(a, file);
-    try app.prompt.beginWith(.recent, recent_choices.items);
+/// Empties `choices`, returning where to put the new ones.
+fn newChoices() std.mem.Allocator {
+    _ = choice_arena.reset(.retain_capacity);
+    choices = .empty;
+    return choice_arena.allocator();
 }
+
+/// The folders, each with a separator after it to tell it apart, then the
+/// files.
+fn openRecent() !void {
+    const a = newChoices();
+    for (app.recent_folders.items()) |folder| {
+        try choices.append(a, try std.fmt.allocPrint(a, "{s}{c}", .{ folder, std.fs.path.sep }));
+    }
+    for (app.recent.items()) |file| try choices.append(a, file);
+    try app.prompt.beginWith(.recent, choices.items);
+}
+
+// ---------------------------------------------------------------- notes
+
+/// A Markdown note saved inside the open folder, whose links the graph and
+/// backlinks follow.
+fn isFolderNote(view: *const BufferView) bool {
+    const path = view.path orelse return false;
+    return wikilink.isNote(path) and app.workspace.relativeOf(path) != null;
+}
+
+/// Opens the note a link names, first making it if no file has it yet.
+pub fn followLink(view: *const BufferView, target: []const u8) void {
+    const io = app.io orelse return;
+    const from = view.path orelse return tell(.info, "Save the note before following its links", .{});
+    const path = linkedPath(from, target) catch |err| return report("Could not follow the link", err);
+    defer app.gpa.free(path);
+    createNote(io, path) catch |err| return report("Could not make the note", err);
+    app.openFile(path) catch |err| report("Could not open", err);
+}
+
+/// The file a link in `from` means: one the folder has, or where a new note
+/// for it goes. Caller frees.
+fn linkedPath(from: []const u8, target: []const u8) ![]u8 {
+    if (app.workspace.relativeOf(from)) |relative| {
+        const files = app.workspace.files();
+        if (wikilink.resolve(files, target, relative)) |i| return app.workspace.absolute(app.gpa, files[i]);
+        const made = try wikilink.newNotePath(app.gpa, target, relative);
+        defer app.gpa.free(made);
+        return app.workspace.absolute(app.gpa, made);
+    }
+    // Outside the open folder only the notes beside it are known.
+    const made = try wikilink.newNotePath(app.gpa, target, std.fs.path.basename(from));
+    defer app.gpa.free(made);
+    return std.fs.path.join(app.gpa, &.{ std.fs.path.dirname(from) orelse ".", made });
+}
+
+/// Makes an empty note at `path`, unless a file is there already.
+fn createNote(io: std.Io, path: []const u8) !void {
+    if (std.fs.path.dirname(path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
+    const file = std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true }) catch |err| switch (err) {
+        error.PathAlreadyExists => return,
+        else => return err,
+    };
+    file.close(io);
+    app.workspace.refresh(io);
+}
+
+/// Offers the folder's notes to link to, once `[[` is typed in one.
+pub fn linkNote() !void {
+    const view = app.buffer.current() orelse return;
+    if (!isFolderNote(view)) return;
+    const a = newChoices();
+    for (app.workspace.notes().notes) |n| {
+        try choices.append(a, try a.dupe(u8, if (n.path) |p| wikilink.key(p) else n.name));
+    }
+    try app.prompt.beginWith(.link_note, choices.items);
+}
+
+/// Finishes the link being typed with the note chosen.
+pub fn insertLink(chosen: []const u8) !void {
+    const view = app.buffer.current() orelse return;
+    try view.insert(shortestName(chosen));
+    const at = view.cursor.offset;
+    const closed = view.tree.byteAt(at) == ']' and view.tree.byteAt(at + 1) == ']';
+    if (!closed) try view.insert("]]");
+}
+
+/// A note's name alone, unless another note on offer has it too.
+fn shortestName(chosen: []const u8) []const u8 {
+    const name = std.fs.path.basenamePosix(chosen);
+    var count: usize = 0;
+    for (choices.items) |c| {
+        if (std.ascii.eqlIgnoreCase(std.fs.path.basenamePosix(c), name)) count += 1;
+    }
+    return if (count == 1) name else chosen;
+}
+
+/// Lists the notes that link to the one in front.
+fn showBacklinks() !void {
+    if (!folderOpen()) return;
+    const view = app.buffer.current() orelse return;
+    if (!isFolderNote(view)) return tell(.info, "Backlinks are for Markdown notes in the open folder", .{});
+    const graph = app.workspace.notes();
+    const note = graph.find(app.workspace.relativeOf(view.path.?).?) orelse return tell(.info, no_backlinks, .{});
+    var from: std.ArrayList(u32) = .empty;
+    defer from.deinit(app.gpa);
+    try graph.backlinks(app.gpa, note, &from);
+    if (from.items.len == 0) return tell(.info, no_backlinks, .{});
+    const a = newChoices();
+    for (from.items) |i| try choices.append(a, try a.dupe(u8, graph.notes[i].path.?));
+    try app.prompt.beginWith(.backlinks, choices.items);
+}
+
+const no_backlinks = "No notes link here";
 
 /// Whether a folder is open, saying how to open one when it is not.
 fn folderOpen() bool {

@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
+const notes_mod = @import("notes.zig");
 
 /// Folders never listed: version control, dependencies and build output,
 /// which hold many files nobody opens by name.
@@ -17,6 +18,8 @@ const skipped = [_][]const u8{
 /// Past this many files the listing stops, so opening a home folder or a
 /// drive's root stays usable.
 pub const max_files = 200_000;
+/// A zero byte in this much of the start marks a file as binary.
+const binary_probe = 8000;
 
 /// The files of one walk, all allocated in its arena.
 const Listing = struct {
@@ -25,6 +28,8 @@ const Listing = struct {
     files: []const []const u8 = &.{},
     /// The walk stopped at `max_files`.
     cut_short: bool = false,
+    /// The notes among the files, and their links.
+    notes: notes_mod.Graph = .{},
     /// Which opening of a folder it belongs to.
     generation: u32,
 };
@@ -105,6 +110,10 @@ pub const Workspace = struct {
         return if (w.listing) |l| l.files else &.{};
     }
 
+    pub fn notes(w: *const Self) notes_mod.Graph {
+        return if (w.listing) |l| l.notes else .{};
+    }
+
     pub fn cutShort(w: *const Self) bool {
         return if (w.listing) |l| l.cut_short else false;
     }
@@ -134,6 +143,32 @@ pub const Workspace = struct {
         // A newer walk of the same folder may have got there first.
         if (w.pending.swap(listing, .acq_rel)) |older| free(w.gpa, older);
         if (w.on_listed) |wake| wake();
+    }
+};
+
+/// Reads files of a folder one at a time, into one buffer.
+pub const Reader = struct {
+    gpa: Allocator,
+    io: std.Io,
+    root: []const u8,
+    /// Larger files are skipped.
+    limit: usize,
+    buf: std.ArrayList(u8) = .empty,
+
+    pub fn deinit(r: *Reader) void {
+        r.buf.deinit(r.gpa);
+    }
+
+    /// The text of `path`, relative to the root, or null when it cannot be
+    /// read, is too large, or looks binary. Valid until the next call.
+    pub fn text(r: *Reader, path: []const u8) ?[]const u8 {
+        var full_buf: [Dir.max_path_bytes]u8 = undefined;
+        const full = std.fmt.bufPrint(&full_buf, "{s}/{s}", .{ r.root, path }) catch return null;
+        const bytes = Dir.cwd().readFileAlloc(r.io, full, r.gpa, .limited(r.limit)) catch return null;
+        r.buf.deinit(r.gpa);
+        r.buf = .fromOwnedSlice(bytes);
+        if (std.mem.findScalar(u8, bytes[0..@min(bytes.len, binary_probe)], 0) != null) return null;
+        return bytes;
     }
 };
 
@@ -180,6 +215,10 @@ fn walk(gpa: Allocator, io: std.Io, root: []const u8, generation: u32) !*Listing
     }
     std.mem.sort([]const u8, found.items, {}, before);
     listing.files = found.items;
+
+    var reader = Reader{ .gpa = gpa, .io = io, .root = root, .limit = notes_mod.max_note_bytes };
+    defer reader.deinit();
+    listing.notes = try notes_mod.Graph.build(a, listing.files, &reader);
     return listing;
 }
 
@@ -208,7 +247,7 @@ fn scratchTree(tmp: *testing.TmpDir) !void {
     try tmp.dir.createDirPath(io, "src/core");
     try tmp.dir.createDirPath(io, ".git/objects");
     try tmp.dir.createDirPath(io, "node_modules/left-pad");
-    try tmp.dir.writeFile(io, .{ .sub_path = "README.md", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "README.md", .data = "See [[main notes]]." });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/core/buffer.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = ".git/HEAD", .data = "" });
@@ -232,6 +271,9 @@ test "a walk finds every file, sorted, and skips dependency and history folders"
     try testing.expectEqualStrings("src/core/buffer.zig", listing.files[1]);
     try testing.expectEqualStrings("src/main.zig", listing.files[2]);
     try testing.expect(!listing.cut_short);
+    // The README, and the note it links to that has no file yet.
+    try testing.expectEqual(@as(usize, 2), listing.notes.notes.len);
+    try testing.expectEqual(@as(usize, 1), listing.notes.edges.len);
 }
 
 test "opening a folder lists it in the background, and paths map both ways" {

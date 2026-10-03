@@ -23,6 +23,7 @@ const language = @import("language.zig");
 const browser_mod = @import("browser.zig");
 const config_mod = @import("config.zig");
 const welcome = @import("welcome.zig");
+const wikilink = @import("wikilink.zig");
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
@@ -476,7 +477,13 @@ fn typeText() !void {
     const unit = app.config.indentUnit(&unit_buf);
 
     var utf8: [4]u8 = undefined;
-    while (nextTyped(&utf8)) |typed| try typing.typeText(view, typed, lang);
+    var last: u8 = 0;
+    while (nextTyped(&utf8)) |typed| {
+        try typing.typeText(view, typed, lang);
+        last = typed[0];
+    }
+    // `[[` starts a link to another note.
+    if (last == '[' and view.cursor.offset >= 2 and view.tree.byteAt(view.cursor.offset - 2) == '[') try commands.linkNote();
 
     if (pressed(.enter) or pressed(.kp_enter)) try typing.newline(view, lang, unit);
     if (pressed(.tab)) {
@@ -520,7 +527,7 @@ fn windowShortcuts() !void {
     if (pressed(.page_up)) app.buffer.previous();
     selectTabByNumber();
 
-    if (pressed(.b)) try commands.run(.toggle_sidebar);
+    if (pressed(.b)) try commands.run(if (shift) .backlinks else .toggle_sidebar);
     if (pressed(.p)) try commands.run(.quick_open);
     if (pressed(.n)) try commands.run(.new_tab);
     if (pressed(.t) and shift) try commands.run(.reopen_tab);
@@ -616,6 +623,7 @@ fn mouse() !void {
             return;
         }
         if (pen.checkCollisionPointRec(point, l.text)) {
+            if (ctrlDown() and followLinkAt(point, l)) return;
             beginClick(point, l);
             return;
         }
@@ -643,6 +651,19 @@ fn mouse() !void {
             if (point.y > l.text.y + l.text.height) app.editor.scroll(1);
         },
     }
+}
+
+/// Ctrl+click on a `[[link]]` in a note follows it. True when there was one.
+fn followLinkAt(point: pen.Vector2, l: layout_mod.Layout) bool {
+    const view = app.buffer.current() orelse return false;
+    if (!wikilink.isNote(view.path orelse return false)) return false;
+    const at = view.tree.positionAt(offsetAt(view, point, l));
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(app.gpa);
+    view.tree.lineContent(at.line, &line) catch return false;
+    const link = wikilink.at(line.items, at.column) orelse return false;
+    commands.followLink(view, link.target);
+    return true;
 }
 
 /// A button of the empty screen runs its command; a recent folder or file
@@ -871,7 +892,8 @@ fn commitPrompt() !void {
         .open => app.openFile(chosen) catch |err| report("Could not open", err),
         .recent => app.openPath(chosen) catch |err| report("Could not open", err),
         .open_folder => app.openFolder(chosen) catch |err| report("Could not open the folder", err),
-        .quick_open => commands.openInFolder(chosen),
+        .quick_open, .backlinks => commands.openInFolder(chosen),
+        .link_note => try commands.insertLink(chosen),
         .search_folder => if (option) |hit| commands.openHit(hit),
         .save_as => {
             const view = app.buffer.current() orelse return;

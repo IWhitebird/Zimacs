@@ -36,6 +36,8 @@ const test_files = [_]struct { path: []const u8, raylib: bool }{
     .{ .path = "src/core/workspace.zig", .raylib = false },
     .{ .path = "src/core/sidebar.zig", .raylib = false },
     .{ .path = "src/core/fuzzy.zig", .raylib = false },
+    .{ .path = "src/core/wikilink.zig", .raylib = false },
+    .{ .path = "src/core/notes.zig", .raylib = false },
     .{ .path = "src/core/foldersearch.zig", .raylib = false },
     .{ .path = "src/core/syntax.zig", .raylib = false },
     .{ .path = "src/core/comment.zig", .raylib = false },

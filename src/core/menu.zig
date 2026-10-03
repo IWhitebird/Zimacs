@@ -47,6 +47,7 @@ pub const Action = enum {
 
     toggle_wrap,
     toggle_sidebar,
+    backlinks,
     zoom_in,
     zoom_out,
     zoom_reset,
@@ -109,6 +110,7 @@ pub const bar = [_]Group{
     .{ .title = "View", .entries = &.{
         .{ .label = "Word Wrap", .shortcut = "Alt+Z", .action = .toggle_wrap, .checkable = true },
         .{ .label = "Folder Tree", .shortcut = "Ctrl+B", .action = .toggle_sidebar, .checkable = true },
+        .{ .label = "Backlinks", .shortcut = "Ctrl+Shift+B", .action = .backlinks },
         .{ .label = "Zoom In", .shortcut = "Ctrl+=", .action = .zoom_in },
         .{ .label = "Zoom Out", .shortcut = "Ctrl+-", .action = .zoom_out },
         .{ .label = "Reset Zoom", .shortcut = "Ctrl+0", .action = .zoom_reset },
