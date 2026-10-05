@@ -45,6 +45,12 @@ pub fn run(action: Action) !void {
         .backlinks => try showBacklinks(),
         .graph_view => toggleGraph(),
         .close_tab => try requestClose(app.buffer.active),
+        .close_others => try closeTabs(.others),
+        .close_left => try closeTabs(.left),
+        .close_right => try closeTabs(.right),
+        .close_saved => try closeTabs(.saved),
+        .close_all => try closeTabs(.all),
+        .copy_path => copyPath(),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
         .report_problem => reportProblem(),
@@ -116,11 +122,15 @@ fn saveView(view: *BufferView) bool {
 pub fn saveViewAs(view: *BufferView, path: []const u8) void {
     const pending = pending_save;
     pending_save = null;
-    const outcome = app.buffer.saveAs(view, path) catch |err| return report("Could not save", err);
+    const outcome = app.buffer.saveAs(view, path) catch |err| {
+        stopClosing();
+        return report("Could not save", err);
+    };
     afterSave(view, outcome);
     const p = pending orelse return;
     if (p.view == view.id and p.then_close) {
         if (app.buffer.indexOf(view)) |i| app.buffer.close(i);
+        continueClosing();
     }
 }
 
@@ -136,6 +146,7 @@ var pending_save: ?PendingSave = null;
 /// A Save As was cancelled, so nothing waits on it any more.
 pub fn cancelSave() void {
     pending_save = null;
+    stopClosing();
 }
 
 fn afterSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
@@ -174,6 +185,7 @@ pub fn finishFileDialog(outcome: filedialog.Outcome) void {
 /// Closes a tab, first asking what to do with unsaved changes.
 pub fn requestClose(index: usize) !void {
     if (index >= app.buffer.views.items.len) return;
+    stopClosing();
     const view = app.buffer.views.items[index];
     if (!view.edited()) return app.buffer.close(index);
     app.buffer.select(index);
@@ -190,12 +202,69 @@ pub fn answer(a: dialog_mod.Answer) !void {
             try browseToSave(true);
         } else if (saveView(view)) {
             app.buffer.close(index);
+            continueClosing();
+        } else stopClosing(),
+        .discard => {
+            app.buffer.close(index);
+            continueClosing();
         },
-        .discard => app.buffer.close(index),
         .reload => app.buffer.reload(view) catch |err| report("Could not reload", err),
         .keep => app.buffer.acknowledgeDisk(view),
-        .cancel => {},
+        .cancel => stopClosing(),
     }
+}
+
+/// Which tabs a close of several takes, around the one in front.
+const TabSet = enum { others, left, right, saved, all };
+
+/// Closes a set of tabs left to right, asking in turn about each with
+/// unsaved changes. Cancelling stops there and keeps the rest.
+fn closeTabs(set: TabSet) !void {
+    const active = app.buffer.active;
+    const closing = &app.buffer.closing;
+    closing.clearRetainingCapacity();
+    // Last first, so they come off the end left to right.
+    var i = app.buffer.views.items.len;
+    while (i > 0) {
+        i -= 1;
+        const view = app.buffer.views.items[i];
+        const take = switch (set) {
+            .others => i != active,
+            .left => i < active,
+            .right => i > active,
+            .saved => !view.edited(),
+            .all => true,
+        };
+        if (take) try closing.append(app.gpa, view.id);
+    }
+    continueClosing();
+}
+
+/// Closes the queued tabs, stopping to ask about one with unsaved changes.
+fn continueClosing() void {
+    while (app.buffer.closing.pop()) |id| {
+        const view = app.buffer.withId(id) orelse continue;
+        const index = app.buffer.indexOf(view) orelse continue;
+        if (view.edited()) {
+            app.buffer.select(index);
+            app.dialog.ask(.{ .close_unsaved = view });
+            return;
+        }
+        app.buffer.close(index);
+    }
+}
+
+fn stopClosing() void {
+    app.buffer.closing.clearRetainingCapacity();
+}
+
+fn copyPath() void {
+    const view = app.buffer.current() orelse return;
+    const path = view.path orelse return tell(.info, "{s} has not been saved yet", .{view.name});
+    const text = app.gpa.dupeZ(u8, path) catch return;
+    defer app.gpa.free(text);
+    pen.setClipboardText(text);
+    tell(.info, "Copied {s}", .{path});
 }
 
 // ------------------------------------------------------------ the disk
@@ -708,6 +777,23 @@ fn toggleWrap() void {
 }
 
 /// Whether a checkable menu entry shows its tick.
+/// Whether an entry can do anything now; one that cannot is greyed out.
+pub fn enabled(action: Action) bool {
+    const views = app.buffer.views.items;
+    const active = app.buffer.active;
+    return switch (action) {
+        .close_others => views.len > 1,
+        .close_left => views.len > 0 and active > 0,
+        .close_right => active + 1 < views.len,
+        .close_saved => for (views) |v| {
+            if (!v.edited()) break true;
+        } else false,
+        .copy_path => if (app.buffer.current()) |v| v.path != null else false,
+        .reopen_tab => app.buffer.closed.items.len > 0,
+        else => true,
+    };
+}
+
 pub fn checked(action: Action) bool {
     return switch (action) {
         .toggle_wrap => app.config.wrap_lines,

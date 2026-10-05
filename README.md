@@ -45,7 +45,9 @@ Open a folder of Markdown files with `File → Open Folder`. In a note:
 
 Markdown links to notes, `[text](note.md)`, count as links too.
 
-## AI agents
+## AI agents (beta)
+
+This is a beta: the tools and their names may change.
 
 `zimacs mcp [folder]` runs an [MCP](https://modelcontextprotocol.io)
 server over standard input and output. Its tools list, read, write,

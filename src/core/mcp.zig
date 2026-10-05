@@ -191,7 +191,7 @@ pub const Server = struct {
         return respond(out, id, .{
             .protocolVersion = version,
             .capabilities = .{ .tools = .{ .listChanged = false } },
-            .serverInfo = .{ .name = "zimacs", .title = "Zimacs notes", .version = s.version },
+            .serverInfo = .{ .name = "zimacs", .title = "Zimacs notes (beta)", .version = s.version },
             .instructions = try std.fmt.allocPrint(arena, instructions, .{s.notebook.root}),
         });
     }

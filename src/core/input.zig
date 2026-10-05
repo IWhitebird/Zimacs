@@ -315,6 +315,7 @@ fn handleMenu() !bool {
 
     if (menu_mod.titleAt(point, l, app.font)) |index| {
         if (clicked) {
+            app.menu.tab_menu_at = null;
             app.menu.open = if (app.menu.open == index) null else index;
         } else if (app.menu.open != null) {
             // Sliding across the bar with one menu open opens the next, the
@@ -327,16 +328,16 @@ fn handleMenu() !bool {
         return true;
     }
 
-    const index = app.menu.open orelse return false;
-    if (menu_mod.entryAt(point, index, l, app.font)) |action| {
-        if (clicked) {
+    const panel = app.menu.panel(l, app.font) orelse return false;
+    if (panel.entryAt(point, app.font)) |entry| {
+        if (clicked and commands.enabled(entry.action)) {
             app.menu.close();
-            try commands.run(action);
+            try commands.run(entry.action);
         }
         return true;
     }
     // A click anywhere else just closes the menu.
-    if (clicked) app.menu.close();
+    if (clicked or pen.isMouseButtonPressed(.right)) app.menu.close();
     return true;
 }
 
@@ -593,9 +594,21 @@ fn mouse() !void {
     const point = pen.getMousePosition();
     const l = editor.currentLayout();
 
+    // The middle button closes a tab, the right one opens its menu.
+    if (app.editor.tabs.tabAt(l.tabs, point)) |index| {
+        if (pen.isMouseButtonPressed(.middle)) return commands.requestClose(index);
+        if (pen.isMouseButtonPressed(.right)) {
+            app.buffer.select(index);
+            app.graph.hide();
+            app.menu.tab_menu_at = point;
+            return;
+        }
+    }
+
     if (pen.isMouseButtonPressed(.left)) {
         if (pen.checkCollisionPointRec(point, l.sidebar)) return clickSidebar(point, l);
         if (app.buffer.current() == null) return clickWelcome(point, l);
+        if (pen.checkCollisionPointRec(point, app.editor.tabs.newRect(l.tabs))) return commands.run(.new_tab);
         if (app.editor.tabs.closeAt(l.tabs, point)) |index| {
             try commands.requestClose(index);
             return;

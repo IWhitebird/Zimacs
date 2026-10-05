@@ -412,6 +412,9 @@ pub const Buffer = struct {
     active: usize = 0,
     /// Tabs of files closed lately, newest last, for Reopen Closed Tab.
     closed: std.ArrayList(Closed) = .empty,
+    /// Tabs still to close in a close of several at once, by id, the next
+    /// one last. It waits while one with unsaved changes is asked about.
+    closing: std.ArrayList(u64) = .empty,
     next_view_id: u64 = 1,
 
     const Self = @This();
@@ -439,6 +442,7 @@ pub const Buffer = struct {
         b.views.deinit(b.gpa);
         for (b.closed.items) |c| b.gpa.free(c.path);
         b.closed.deinit(b.gpa);
+        b.closing.deinit(b.gpa);
     }
 
     /// Holds state only; the Editor draws it.

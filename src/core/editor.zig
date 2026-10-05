@@ -563,18 +563,25 @@ pub const Editor = struct {
         e.tabs.widths.clearRetainingCapacity();
         for (app.buffer.views.items) |view| try e.tabs.widths.append(app.gpa, tabWidth(view));
         e.tabs.close_size = closeSize();
+        e.tabs.new_size = app.font.metrics.height * new_tab_share;
         e.tabs.update(l.tabs.width, app.buffer.active);
 
         pen.drawRectangleRec(l.tabs, theme.current.tab_background);
+        const point = pen.getMousePosition();
+        const new_tab = e.tabs.newRect(l.tabs);
+        const new_hot = pen.checkCollisionPointRec(point, new_tab);
+        if (new_hot) pen.drawRectangleRounded(new_tab, close_roundness, round_segments, theme.current.selection);
+        widgets.drawPlus(new_tab, if (new_hot) theme.current.tab_text_active else theme.current.tab_text);
+
+        const area = e.tabs.tabArea(l.tabs);
         pen.beginScissorMode(
-            @intFromFloat(l.tabs.x),
-            @intFromFloat(l.tabs.y),
-            @intFromFloat(l.tabs.width),
-            @intFromFloat(l.tabs.height),
+            @intFromFloat(area.x),
+            @intFromFloat(area.y),
+            @intFromFloat(area.width),
+            @intFromFloat(area.height),
         );
         defer pen.endScissorMode();
 
-        const point = pen.getMousePosition();
         for (app.buffer.views.items, 0..) |view, i| {
             const rect = e.tabs.rect(l.tabs, i) orelse continue;
             const is_active = i == app.buffer.active;
@@ -597,7 +604,7 @@ pub const Editor = struct {
                     theme.current.tab_text);
             }
         }
-        drawOverflowFades(l.tabs, e.tabs);
+        drawOverflowFades(area, e.tabs);
     }
 
     fn drawStatus(e: *Self, view: ?*BufferView, l: Layout, cell: Metrics) !void {
@@ -841,7 +848,7 @@ fn drawMenu(l: Layout, cell: Metrics) void {
     }
 
     if (app.window.custom_frame) drawTitlebar(l, cell, point);
-    if (app.menu.open) |index| drawDropdown(index, l, cell, point);
+    if (app.menu.panel(l, app.font)) |panel| drawPanel(panel, cell, point);
     if (app.menu.showing_about) drawAbout(l, cell);
 }
 
@@ -972,19 +979,21 @@ fn drawFrame(l: Layout) void {
     pen.drawRectangleLinesEx(bounds, 1, theme.current.scrollbar);
 }
 
-fn drawDropdown(index: usize, l: Layout, cell: Metrics, point: pen.Vector2) void {
-    const panel = menu.dropdownRect(index, l, app.font);
-    pen.drawRectangleRec(panel, theme.current.tab_background);
-    pen.drawRectangleLinesEx(panel, 1, theme.current.scrollbar);
+/// An open menu. Entries that cannot do anything now are greyed out.
+fn drawPanel(panel: menu.Panel, cell: Metrics, point: pen.Vector2) void {
+    const box = panel.rect(app.font);
+    pen.drawRectangleRec(box, theme.current.tab_background);
+    pen.drawRectangleLinesEx(box, 1, theme.current.scrollbar);
+    const check = panel.checkWidth(app.font);
 
-    for (menu.bar[index].entries, 0..) |entry, row| {
-        const rect = menu.entryRect(index, row, l, app.font);
-        const hot = pen.checkCollisionPointRec(point, rect);
+    for (panel.entries, 0..) |entry, row| {
+        const rect = panel.entryRect(row, app.font);
+        const usable = commands.enabled(entry.action);
+        const hot = usable and pen.checkCollisionPointRec(point, rect);
         if (hot) pen.drawRectangleRec(rect, theme.current.selection);
 
         const y = rect.y + (rect.height - cell.height) / 2;
-        const check = menu.checkWidth(index, app.font);
-        const ink = if (hot) theme.current.tab_text_active else theme.current.text;
+        const ink = if (!usable) theme.current.gutter_text else if (hot) theme.current.tab_text_active else theme.current.text;
         if (entry.checkable and commands.checked(entry.action)) {
             widgets.drawTick(.{ .x = rect.x + layout.padding, .y = y, .width = check, .height = cell.height }, ink);
         }
@@ -1192,6 +1201,8 @@ const close_roundness = 0.4;
 const round_segments = 4;
 /// A tab's close button, as a share of the line height.
 const close_share = 0.7;
+/// The new-tab button's side, as a share of the text height.
+const new_tab_share = 1.0;
 
 /// The line caret: thin, but never under a pixel.
 fn lineCaretWidth(cell: Metrics) f32 {

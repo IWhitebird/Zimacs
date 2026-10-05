@@ -154,6 +154,14 @@ pub fn drawCross(rect: pen.Rectangle, colour: pen.Color) void {
     );
 }
 
+/// A plus sign, as on the button that opens a new tab.
+pub fn drawPlus(rect: pen.Rectangle, colour: pen.Color) void {
+    const inset = rect.width * 0.22;
+    const mid = pen.Vector2{ .x = rect.x + rect.width / 2, .y = rect.y + rect.height / 2 };
+    pen.drawLineEx(.{ .x = rect.x + inset, .y = mid.y }, .{ .x = rect.x + rect.width - inset, .y = mid.y }, stroke, colour);
+    pen.drawLineEx(.{ .x = mid.x, .y = rect.y + inset }, .{ .x = mid.x, .y = rect.y + rect.height - inset }, stroke, colour);
+}
+
 /// Room for the visible part of a field's text.
 const max_field_bytes = 1024;
 
