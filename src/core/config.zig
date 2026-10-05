@@ -3,65 +3,27 @@
 //! Everything has a working default, so a missing or partly broken config is
 //! never fatal - unknown keys and bad values are reported and skipped.
 //!
-//! Colours are `#rrggbb`. See `writeDefault` for the file Zimacs creates on
+//! The colours come from a built-in theme, and any colour set as `#rrggbb`
+//! changes the theme's. See `writeDefault` for the file Zimacs creates on
 //! first run.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const palette = @import("palette.zig");
 
 pub const CaretStyle = enum { line, block, underline };
 
-pub const Colors = struct {
-    background: u24 = 0x181818,
-    text: u24 = 0xDEDEE6,
-    current_line: u24 = 0x212121,
-    selection: u24 = 0x264F78,
-    gutter_text: u24 = 0x5C6070,
-    gutter_text_active: u24 = 0xBEC3D7,
-    status_background: u24 = 0x121212,
-    status_text: u24 = 0xA0A5B9,
-    tab_background: u24 = 0x101010,
-    tab_active: u24 = 0x181818,
-    tab_text: u24 = 0x8A8F9E,
-    tab_text_active: u24 = 0xDEDEE6,
-    caret: u24 = 0x78C8FF,
-    hint: u24 = 0x6E7284,
-    scrollbar: u24 = 0x3A3A42,
-    scrollbar_hover: u24 = 0x55555F,
-    close_hover: u24 = 0xC42B1C,
-    close_hover_text: u24 = 0xFFFFFF,
-    find_match: u24 = 0x5C3F12,
-    selection_match: u24 = 0x2F3B48,
-    bracket_match: u24 = 0x3B4252,
-    syntax_keyword: u24 = 0xC586C0,
-    syntax_string: u24 = 0xCE9178,
-    syntax_escape: u24 = 0xD7BA7D,
-    syntax_comment: u24 = 0x6A9955,
-    syntax_number: u24 = 0xB5CEA8,
-    syntax_constant: u24 = 0x4FC1FF,
-    syntax_function: u24 = 0xDCDCAA,
-    syntax_type: u24 = 0x4EC9B0,
-    syntax_property: u24 = 0x9CDCFE,
-    syntax_tag: u24 = 0x569CD6,
-    syntax_builtin: u24 = 0x569CD6,
-    warning: u24 = 0xE5A94B,
-
-    /// Sets the field named `key`, if there is one.
-    pub fn apply(c: *Colors, key: []const u8, value: []const u8) !void {
-        inline for (@typeInfo(Colors).@"struct".fields) |field| {
-            if (eq(key, field.name)) {
-                @field(c, field.name) = try parseColor(value);
-                return;
-            }
-        }
-        return error.UnknownKey;
-    }
-};
+pub const Colors = palette.Colors;
+/// A colour of the theme, by name.
+pub const ColorKey = std.meta.FieldEnum(Colors);
+/// Colours the settings file sets on top of the theme's.
+pub const Overrides = std.EnumArray(ColorKey, ?u24);
 
 /// The widest indentation unit `tab_width` can ask for.
 pub const max_indent_unit = 16;
 
 pub const Config = struct {
+    theme: palette.Name = .dark,
     font_size: f32 = 18,
     caret_style: CaretStyle = .line,
     tab_width: u8 = 4,
@@ -80,9 +42,22 @@ pub const Config = struct {
     custom_titlebar: bool = true,
     /// Install new releases in the background. Only official builds ever do.
     auto_update: bool = true,
-    colors: Colors = .{},
+    overrides: Overrides = .initFill(null),
     /// The first line that could not be used, to tell the user about.
     problem: ?Problem = null,
+
+    /// The theme's colours, with the file's own on top. A colour equal to
+    /// the dark theme's is not taken as one: settings files written before
+    /// there were themes listed every colour at that value.
+    pub fn colors(c: *const Config) Colors {
+        var result = c.theme.colors();
+        inline for (@typeInfo(Colors).@"struct".fields) |field| {
+            if (c.overrides.get(@field(ColorKey, field.name))) |value| {
+                if (value != @field(palette.dark, field.name)) @field(result, field.name) = value;
+            }
+        }
+        return result;
+    }
 
     /// What one level of indentation is made of: a tab, or `tab_width` spaces.
     pub fn indentUnit(c: *const Config, buf: *[max_indent_unit]u8) []const u8 {
@@ -124,13 +99,19 @@ pub const Config = struct {
     /// here; colours have keys of their own.
     fn applyPair(c: *Self, key: []const u8, value: []const u8) !void {
         inline for (@typeInfo(Self).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "colors") or std.mem.eql(u8, field.name, "problem")) continue;
+            if (comptime std.mem.eql(u8, field.name, "overrides") or std.mem.eql(u8, field.name, "problem")) continue;
             if (eq(key, field.name)) {
                 @field(c, field.name) = try parseSetting(field.type, value);
                 return;
             }
         }
-        try c.colors.apply(key, value);
+        inline for (@typeInfo(Colors).@"struct".fields) |field| {
+            if (eq(key, field.name)) {
+                c.overrides.set(@field(ColorKey, field.name), try parseColor(value));
+                return;
+            }
+        }
+        return error.UnknownKey;
     }
 
     pub fn writeDefault(io: std.Io, dir: []const u8) !void {
@@ -197,6 +178,9 @@ const default_text = blk: {
     var text: []const u8 = std.fmt.comptimePrint(
         \\# Zimacs settings. Delete this file to get the defaults back.
         \\
+        \\# dark, light, solarized_dark, solarized_light, gruvbox_dark or nord
+        \\theme = {s}
+        \\
         \\font_size = {d}
         \\
         \\# line, block or underline
@@ -230,12 +214,22 @@ const default_text = blk: {
         \\
         \\
     , .{
-        d.font_size,       @tagName(d.caret_style), d.tab_width,   d.expand_tabs,
-        d.auto_close,      d.restore_session,       d.wrap_lines,  d.show_hidden,
-        d.sidebar_columns, d.custom_titlebar,       d.auto_update,
+        @tagName(d.theme),
+        d.font_size,
+        @tagName(d.caret_style),
+        d.tab_width,
+        d.expand_tabs,
+        d.auto_close,
+        d.restore_session,
+        d.wrap_lines,
+        d.show_hidden,
+        d.sidebar_columns,
+        d.custom_titlebar,
+        d.auto_update,
     });
+    text = text ++ "# Any of these colours, set as #rrggbb, changes the theme's.\n";
     for (@typeInfo(Colors).@"struct".fields) |field| {
-        text = text ++ std.fmt.comptimePrint("{s} = #{x:0>6}\n", .{ field.name, @field(d.colors, field.name) });
+        text = text ++ std.fmt.comptimePrint("# {s} = #{x:0>6}\n", .{ field.name, @field(palette.dark, field.name) });
     }
     break :blk text;
 };
@@ -279,7 +273,7 @@ test "defaults survive an empty file" {
     c.applyText("");
     try testing.expectEqual(@as(f32, 18), c.font_size);
     try testing.expectEqual(CaretStyle.line, c.caret_style);
-    try testing.expectEqual(@as(u24, 0x181818), c.colors.background);
+    try testing.expectEqual(@as(u24, 0x181818), c.colors().background);
 }
 
 test "reads values and ignores comments and blank lines" {
@@ -303,7 +297,21 @@ test "reads values and ignores comments and blank lines" {
     try testing.expectEqual(true, c.wrap_lines);
     try testing.expectEqual(false, c.custom_titlebar);
     try testing.expectEqual(false, c.auto_update);
-    try testing.expectEqual(@as(u24, 0x202020), c.colors.background);
+    try testing.expectEqual(@as(u24, 0x202020), c.colors().background);
+}
+
+test "a theme gives every colour, and the file's own go on top" {
+    var c = Config{};
+    c.applyText(
+        \\theme = light
+        \\text = #102030
+        \\background = #181818
+    );
+    try testing.expectEqual(palette.Name.light, c.theme);
+    try testing.expectEqual(@as(u24, 0x102030), c.colors().text);
+    // An old file's dark default is not a choice, so the theme's stays.
+    try testing.expectEqual(@as(u24, 0xFFFFFF), c.colors().background);
+    try testing.expectEqual(palette.Name.light.colors().caret, c.colors().caret);
 }
 
 test "a bad line does not disturb the others" {

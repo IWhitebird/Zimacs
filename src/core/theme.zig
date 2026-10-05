@@ -5,7 +5,8 @@
 
 const std = @import("std");
 const pen = @import("raylib");
-const Colors = @import("config.zig").Colors;
+const palette = @import("palette.zig");
+const Colors = palette.Colors;
 
 pub const Theme = struct {
     background: pen.Color,
@@ -43,7 +44,7 @@ pub const Theme = struct {
     warning: pen.Color,
 };
 
-pub var current: Theme = build(.{});
+pub var current: Theme = build(palette.dark);
 
 pub fn apply(colors: Colors) void {
     current = build(colors);
@@ -83,8 +84,11 @@ test "hex splits into channels" {
 }
 
 test "config colours reach the theme" {
-    apply(.{ .background = 0x102030, .caret = 0xFFEEDD });
+    var colors = palette.dark;
+    colors.background = 0x102030;
+    colors.caret = 0xFFEEDD;
+    apply(colors);
     try std.testing.expectEqual(@as(u8, 0x10), current.background.r);
     try std.testing.expectEqual(@as(u8, 0xDD), current.caret.b);
-    apply(.{});
+    apply(palette.dark);
 }

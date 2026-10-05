@@ -30,8 +30,13 @@ refused. Set `auto_update = false` in the settings to turn this off.
 
 ## Settings
 
-`Help → Edit Settings`, or `Ctrl+,`. The file lives in `~/.config/zimacs`
-on Linux and `%APPDATA%\zimacs` on Windows.
+`Help → Settings`, or `Ctrl+,`, changes the theme, text size, tab width and
+the rest. The themes are Dark, Light, Solarized Dark, Solarized Light,
+Gruvbox Dark and Nord.
+
+Changes are saved to the settings file, which `Help → Open Settings File`
+opens. It lives in `~/.config/zimacs` on Linux and `%APPDATA%\zimacs` on
+Windows. Saving it applies it, and a colour set in it changes the theme's.
 
 ## Notes
 

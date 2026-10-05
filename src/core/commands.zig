@@ -30,6 +30,9 @@ const updatelog = @import("updatelog.zig");
 const wikilink = @import("wikilink.zig");
 const editor = @import("editor.zig");
 const mcp = @import("mcp.zig");
+const settings_mod = @import("settings.zig");
+const Setting = settings_mod.Setting;
+const theme = @import("theme.zig");
 
 pub fn run(action: Action) !void {
     switch (action) {
@@ -52,6 +55,7 @@ pub fn run(action: Action) !void {
         .close_saved => try closeTabs(.saved),
         .close_all => try closeTabs(.all),
         .copy_path => copyPath(),
+        .settings => app.settings.open(),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
         .report_problem => reportProblem(),
@@ -157,6 +161,7 @@ fn afterSave(view: *BufferView, outcome: buffer_mod.Buffer.Saved) void {
     }
     // Its links may have changed.
     if (isFolderNote(view)) app.workspace.refresh(app.io.?);
+    if (view.path) |p| if (app.config_path) |settings_path| if (std.mem.eql(u8, p, settings_path)) reloadSettings();
 }
 
 // ------------------------------------------------------- file dialogs
@@ -792,17 +797,49 @@ pub fn findStep(direction: find_mod.Direction) !void {
 }
 
 fn toggleWrap() void {
-    app.config.wrap_lines = !app.config.wrap_lines;
-    for (app.buffer.views.items) |v| {
+    changeSetting(.wrap_lines, 1);
+}
+
+/// Changes a setting from the settings window, the menu or the keyboard:
+/// applies it now and writes it to the settings file.
+pub fn changeSetting(s: Setting, delta: i32) void {
+    const before = app.config;
+    settings_mod.change(&app.config, s, delta);
+    applySettings(before);
+    const io = app.io orelse return;
+    const path = app.config_path orelse return;
+    var buf: [32]u8 = undefined;
+    config_mod.store(io, app.gpa, path, @tagName(s), settings_mod.stored(&app.config, s, &buf)) catch |err|
+        report("Could not save the setting", err);
+}
+
+/// Makes the editor match `app.config` where it differs from `before`.
+/// Settings read as they are used need nothing here.
+fn applySettings(before: config_mod.Config) void {
+    const now = &app.config;
+    theme.apply(now.colors());
+    if (now.font_size != before.font_size) app.font.setBase(now.font_size);
+    if (now.wrap_lines != before.wrap_lines) for (app.buffer.views.items) |v| {
         v.left_column = 0;
         v.top_row = 0;
         // Keeps the caret on screen after the text reflows.
         v.followed = null;
-    }
+    };
+    if (now.custom_titlebar != before.custom_titlebar) tell(.info, "The title bar changes the next time Zimacs starts", .{});
+}
+
+/// Reads the settings file again, as after it was saved from a tab.
+fn reloadSettings() void {
     const io = app.io orelse return;
     const path = app.config_path orelse return;
-    config_mod.store(io, app.gpa, path, "wrap_lines", if (app.config.wrap_lines) "true" else "false") catch |err|
-        report("Could not save the setting", err);
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, app.gpa, .limited(config_mod.max_bytes)) catch |err|
+        return report("Could not read the settings", err);
+    defer app.gpa.free(text);
+    const before = app.config;
+    app.config = .{};
+    app.config.applyText(text);
+    applySettings(before);
+    if (app.config.problem) |p| tell(.problem, "{s} line {d}: {s}", .{ config_mod.file_name, p.line, p.why });
 }
 
 /// Whether a checkable menu entry shows its tick.

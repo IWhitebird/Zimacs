@@ -96,6 +96,7 @@ pub fn drawChevron(rect: pen.Rectangle, pointing: Pointing, ink: pen.Color) void
     const tips: [3]pen.Vector2 = switch (pointing) {
         .up => .{ .{ .x = cx - size, .y = cy + half }, .{ .x = cx, .y = cy - half }, .{ .x = cx + size, .y = cy + half } },
         .down => .{ .{ .x = cx - size, .y = cy - half }, .{ .x = cx, .y = cy + half }, .{ .x = cx + size, .y = cy - half } },
+        .left => .{ .{ .x = cx + half, .y = cy - size }, .{ .x = cx - half, .y = cy }, .{ .x = cx + half, .y = cy + size } },
         .right => .{ .{ .x = cx - half, .y = cy - size }, .{ .x = cx + half, .y = cy }, .{ .x = cx - half, .y = cy + size } },
     };
     pen.drawLineEx(tips[0], tips[1], stroke, ink);
@@ -165,4 +166,4 @@ pub fn drawPlus(rect: pen.Rectangle, colour: pen.Color) void {
 /// Room for the visible part of a field's text.
 const max_field_bytes = 1024;
 
-pub const Pointing = enum { up, down, right };
+pub const Pointing = enum { up, down, left, right };

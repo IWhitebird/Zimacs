@@ -63,6 +63,7 @@ pub const Action = enum {
     zoom_out,
     zoom_reset,
 
+    settings,
     open_config,
     check_updates,
     report_problem,
@@ -132,7 +133,8 @@ pub const bar = [_]Group{
         .{ .label = "Reset Zoom", .shortcut = "Ctrl+0", .action = .zoom_reset },
     } },
     .{ .title = "Help", .entries = &.{
-        .{ .label = "Edit Settings", .shortcut = "Ctrl+,", .action = .open_config },
+        .{ .label = "Settings...", .shortcut = "Ctrl+,", .action = .settings },
+        .{ .label = "Open Settings File", .action = .open_config },
         .{ .label = "Check for Updates", .action = .check_updates },
         .{ .label = "Report a Problem", .action = .report_problem },
         .{ .label = "Copy MCP Command (Beta)", .action = .copy_mcp_command },

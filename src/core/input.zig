@@ -24,6 +24,7 @@ const browser_mod = @import("browser.zig");
 const config_mod = @import("config.zig");
 const welcome = @import("welcome.zig");
 const wikilink = @import("wikilink.zig");
+const settings_mod = @import("settings.zig");
 
 /// Lines scrolled per wheel notch.
 const wheel_lines = 3;
@@ -73,6 +74,7 @@ pub const Input = struct {
         // First, so prompts and panels never block moving or closing.
         if (caption.handle()) return;
         if (try DialogInput.handle()) return;
+        if (try SettingsInput.handle()) return;
         if (try FindBar.handle()) return;
         if (app.prompt.active) {
             try runPrompt();
@@ -177,6 +179,44 @@ const DialogInput = struct {
         } else if (pen.isMouseButtonPressed(.left)) {
             const g = dialog_mod.geometry(editor.currentLayout(), app.font, q);
             if (dialog_mod.buttonAt(pen.getMousePosition(), g)) |i| try commands.answer(q.answers()[i]);
+        }
+        return true;
+    }
+};
+
+/// Keyboard and pointer for the settings window, which takes both while it
+/// shows: up and down pick a setting, left and right change it.
+const SettingsInput = struct {
+    fn handle() !bool {
+        const s = &app.settings;
+        if (!s.shown) return false;
+        if (pressed(.escape)) {
+            s.shown = false;
+            return true;
+        }
+        if (pressed(.up)) s.move(-1);
+        if (pressed(.down)) s.move(1);
+        if (pressed(.left)) commands.changeSetting(s.focus, -1);
+        if (pressed(.right) or pressed(.enter) or pressed(.space)) commands.changeSetting(s.focus, 1);
+        if (!pen.isMouseButtonPressed(.left)) return true;
+
+        const g = settings_mod.geometry(editor.currentLayout(), app.font);
+        // A click outside the window closes it.
+        switch (settings_mod.hit(g, pen.getMousePosition()) orelse .close) {
+            .less => |which| {
+                s.focus = which;
+                commands.changeSetting(which, -1);
+            },
+            .more, .toggle => |which| {
+                s.focus = which;
+                commands.changeSetting(which, 1);
+            },
+            .open_file => {
+                s.shown = false;
+                try commands.run(.open_config);
+            },
+            .close => s.shown = false,
+            .panel => {},
         }
         return true;
     }
@@ -540,7 +580,7 @@ fn windowShortcuts() !void {
     if (pressed(.h)) try commands.run(.replace);
     if (pressed(.g)) try commands.run(if (shift) .graph_view else .goto_line);
     if (pressed(.s)) try commands.run(if (shift) .save_as else .save);
-    if (pressed(.comma)) try commands.run(.open_config);
+    if (pressed(.comma)) try commands.run(.settings);
 }
 
 /// Shortcuts that edit the document.

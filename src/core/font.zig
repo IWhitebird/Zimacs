@@ -194,6 +194,13 @@ pub const Font = struct {
         if (f.needsRefresh()) try f.load();
     }
 
+    /// A new configured size, keeping how far the text is zoomed from it.
+    pub fn setBase(f: *Self, size: f32) void {
+        const offset = f.zoom();
+        f.base = size;
+        f.setSize(size + offset);
+    }
+
     pub fn zoomIn(f: *Self) void {
         f.setSize(f.size + zoom_step);
     }

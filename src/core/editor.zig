@@ -31,6 +31,7 @@ const brackets = @import("brackets.zig");
 const syntax = @import("syntax.zig");
 const widgets = @import("widgets.zig");
 const welcome = @import("welcome.zig");
+const settings_mod = @import("settings.zig");
 
 pub const Editor = struct {
     /// One line as stored, then the same line with tabs expanded.
@@ -123,6 +124,7 @@ pub const Editor = struct {
         try drawFindBar(l, cell);
         // Last, so the dropdown and the About panel sit over everything else.
         drawMenu(l, cell);
+        drawSettings(l, cell);
         drawDialog(l, cell);
         drawFrame(l);
     }
@@ -924,6 +926,42 @@ fn drawTitlebar(l: Layout, cell: Metrics, point: pen.Vector2) void {
             theme.current.tab_text;
         widgets.drawCaptionGlyph(b, rect, ink);
     }
+}
+
+// ------------------------------------------------------------- settings
+
+/// The settings window: each setting on a row, the focused one picked out,
+/// toggles as boxes and choices between arrows.
+fn drawSettings(l: Layout, cell: Metrics) void {
+    if (!app.settings.shown) return;
+    const t = theme.current;
+    dimBehind(l);
+    const g = settings_mod.geometry(l, app.font);
+    pen.drawRectangleRec(g.panel, t.tab_background);
+    pen.drawRectangleLinesEx(g.panel, 1, t.scrollbar);
+    app.font.draw(settings_mod.title, g.panel.x + layout.padding * 3, g.panel.y + layout.padding * 3, t.tab_text_active);
+
+    const point = pen.getMousePosition();
+    var buf: [32]u8 = undefined;
+    for (g.rows, 0..) |row, i| {
+        const s: settings_mod.Setting = @enumFromInt(i);
+        const focused = s == app.settings.focus;
+        if (focused) pen.drawRectangleRec(row, t.current_line);
+        const y = row.y + (row.height - cell.height) / 2;
+        app.font.draw(s.label(), row.x + layout.padding, y, if (focused) t.tab_text_active else t.text);
+        if (s.isToggle()) {
+            const box = g.check[i];
+            pen.drawRectangleLinesEx(box, 1, if (focused) t.caret else t.scrollbar);
+            if (settings_mod.isOn(&app.config, s)) widgets.drawTick(box, t.caret);
+            continue;
+        }
+        widgets.drawChevron(g.less[i], .left, widgets.hoverInk(g.less[i], point));
+        widgets.drawChevron(g.more[i], .right, widgets.hoverInk(g.more[i], point));
+        const value = settings_mod.shown(&app.config, s, &buf);
+        app.font.draw(value, g.value[i].x + (g.value[i].width - app.font.widthOf(value)) / 2, y, t.text);
+    }
+    widgets.drawTextButton(g.open_file, settings_mod.open_file_label, point, cell);
+    widgets.drawTextButton(g.close, settings_mod.close_label, point, cell);
 }
 
 // --------------------------------------------------------------- dialog

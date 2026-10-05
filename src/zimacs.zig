@@ -44,6 +44,7 @@ const Workspace = @import("core/workspace.zig").Workspace;
 const Sidebar = @import("core/sidebar.zig").Sidebar;
 const FolderSearch = @import("core/foldersearch.zig").FolderSearch;
 const GraphView = @import("core/graph.zig").GraphView;
+const Settings = @import("core/settings.zig").Settings;
 const native = @import("core/native.zig");
 
 const leak_checks = builtin.mode == .Debug;
@@ -101,6 +102,7 @@ pub var workspace = Workspace{ .gpa = gpa, .on_listed = native.wake };
 pub var sidebar = Sidebar{ .gpa = gpa };
 pub var folder_search = FolderSearch{ .gpa = gpa, .on_found = native.wake };
 pub var graph = GraphView.init(gpa);
+pub var settings = Settings{};
 
 /// Where the settings file lives, once it is known. Owned.
 pub var config_path: ?[]const u8 = null;
@@ -135,7 +137,7 @@ pub fn run(start: Start) !void {
     defer if (config_path) |p| gpa.free(p);
 
     const config_failure = loadConfig(start);
-    theme.apply(config.colors);
+    theme.apply(config.colors());
 
     data_dir = if (start.env) |env| try paths.dataDir(gpa, env) else null;
     defer if (data_dir) |d| gpa.free(d);
