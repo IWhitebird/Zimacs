@@ -7,7 +7,7 @@ const text_mod = @import("text.zig");
 const fuzzy = @import("fuzzy.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { open, recent, open_folder, quick_open, command, search_folder, link_note, backlinks, save_as, browse, save_into, goto_line };
+pub const Kind = enum { open, recent, open_folder, quick_open, command, search_folder, link_note, backlinks, new_file, new_folder, rename, save_as, browse, save_into, goto_line };
 
 /// Case-insensitive substring test, for narrowing the suggestion list.
 fn contains(haystack: []const u8, needle: []const u8) bool {
@@ -190,6 +190,9 @@ pub const Prompt = struct {
             .search_folder => "Search folder: ",
             .link_note => "Link to: ",
             .backlinks => "Linked from: ",
+            .new_file => "New file: ",
+            .new_folder => "New folder: ",
+            .rename => "Rename to: ",
             .save_as => "Save as: ",
             .goto_line => "Go to line: ",
             // The browsers show the directory they are in instead.

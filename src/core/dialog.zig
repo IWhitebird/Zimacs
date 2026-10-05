@@ -10,31 +10,45 @@ const Font = @import("font.zig").Font;
 const BufferView = @import("buffer.zig").BufferView;
 const Layout = layout.Layout;
 
-pub const Answer = enum { save, discard, cancel, reload, keep };
+pub const Answer = enum { save, discard, cancel, reload, keep, delete };
 
 pub const Question = union(enum) {
     close_unsaved: *BufferView,
     changed_on_disk: *BufferView,
+    /// Deleting a file or folder of the open folder, by its name.
+    delete_entry: []const u8,
 
-    pub fn view(q: Question) *BufferView {
+    /// What it is about, for the title.
+    pub fn name(q: Question) []const u8 {
         return switch (q) {
-            inline else => |v| v,
+            .close_unsaved, .changed_on_disk => |v| v.name,
+            .delete_entry => |n| n,
         };
     }
 
-    /// Left to right; the first is the default.
+    /// Left to right.
     pub fn answers(q: Question) []const Answer {
         return switch (q) {
             .close_unsaved => &.{ .save, .discard, .cancel },
             .changed_on_disk => &.{ .reload, .keep },
+            .delete_entry => &.{ .delete, .cancel },
         };
     }
 
     /// What Escape means: whichever choice loses nothing.
     pub fn dismissal(q: Question) Answer {
         return switch (q) {
-            .close_unsaved => .cancel,
+            .close_unsaved, .delete_entry => .cancel,
             .changed_on_disk => .keep,
+        };
+    }
+
+    /// The answer focused at first, which Enter picks: the safe one when
+    /// the other cannot be undone.
+    fn first(q: Question) usize {
+        return switch (q) {
+            .delete_entry => 1,
+            else => 0,
         };
     }
 };
@@ -46,6 +60,7 @@ pub fn label(a: Answer) [:0]const u8 {
         .cancel => "Cancel",
         .reload => "Reload",
         .keep => "Keep Mine",
+        .delete => "Delete",
     };
 }
 
@@ -55,10 +70,11 @@ const max_name = 48;
 pub fn title(buf: []u8, q: Question) [:0]const u8 {
     // Cut from the start, whole characters only, so the extension shows.
     var name_buf: [title_capacity]u8 = undefined;
-    const name = text.fitStart(&name_buf, q.view().name, max_name);
+    const name = text.fitStart(&name_buf, q.name(), max_name);
     return switch (q) {
         .close_unsaved => std.fmt.bufPrintZ(buf, "Save changes to {s}?", .{name}),
         .changed_on_disk => std.fmt.bufPrintZ(buf, "{s} changed on disk.", .{name}),
+        .delete_entry => std.fmt.bufPrintZ(buf, "Delete {s}?", .{name}),
     } catch "";
 }
 
@@ -66,6 +82,7 @@ pub fn detail(q: Question) [:0]const u8 {
     return switch (q) {
         .close_unsaved => "Your changes will be lost if you don't save them.",
         .changed_on_disk => "Reload it, or keep the version you have been editing?",
+        .delete_entry => "It is removed from the disk, and cannot be brought back.",
     };
 }
 
@@ -78,7 +95,7 @@ pub const Dialog = struct {
 
     pub fn ask(d: *Dialog, q: Question) void {
         d.question = q;
-        d.focus = 0;
+        d.focus = q.first();
     }
 
     pub fn close(d: *Dialog) void {

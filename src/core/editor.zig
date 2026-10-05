@@ -589,7 +589,12 @@ pub const Editor = struct {
             defer y += row_height;
             const rect = pen.Rectangle{ .x = l.sidebar.x, .y = y, .width = l.sidebar.width, .height = row_height };
             const is_active = !row.folder and active != null and std.mem.eql(u8, row.path, active.?);
-            if (is_active) {
+            // The row a right click opened the tree menu on.
+            const aimed = if (app.menu.context) |c| c.which == .tree and app.sidebar.target != null and
+                std.mem.eql(u8, app.sidebar.target.?.path, row.path) else false;
+            if (aimed) {
+                pen.drawRectangleRec(rect, t.selection);
+            } else if (is_active) {
                 pen.drawRectangleRec(rect, t.tab_active);
             } else if (pen.checkCollisionPointRec(point, rect)) {
                 pen.drawRectangleRec(rect, t.current_line);

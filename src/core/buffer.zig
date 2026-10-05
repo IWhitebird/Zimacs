@@ -651,6 +651,28 @@ pub const Buffer = struct {
         if (b.closed.items.len > max_closed) b.gpa.free(b.closed.orderedRemove(0).path);
     }
 
+    /// Points the tabs of a file renamed from `old` to `new`, or of files in
+    /// a folder renamed so, at where they are now. Both paths absolute.
+    pub fn moved(b: *Self, old: []const u8, new: []const u8) !void {
+        for (b.views.items) |v| {
+            const path = v.path orelse continue;
+            const rest = if (std.mem.eql(u8, path, old))
+                ""
+            else if (path.len > old.len and std.mem.startsWith(u8, path, old) and std.fs.path.isSep(path[old.len]))
+                path[old.len..]
+            else
+                continue;
+            const now = try std.mem.concat(b.gpa, u8, &.{ new, rest });
+            errdefer b.gpa.free(now);
+            const name = try b.gpa.dupe(u8, std.fs.path.basename(now));
+            b.gpa.free(path);
+            b.gpa.free(v.name);
+            v.path = now;
+            v.name = name;
+            v.setLanguage();
+        }
+    }
+
     pub const Saved = enum { as_before, switched_to_utf8 };
 
     pub fn save(b: *Self, view: *BufferView) !Saved {
@@ -1305,4 +1327,22 @@ test "a closed tab comes back with its caret, and a gone file is skipped" {
     try testing.expectEqualStrings("a.txt", b.current().?.name);
     try testing.expectEqual(@as(u32, 6), b.current().?.cursor.offset);
     try testing.expect(!b.reopenClosed());
+}
+
+test "renaming a file or its folder moves its tab along" {
+    var b = Buffer{ .gpa = testing.allocator, .io = testing.io };
+    defer Buffer.deinit(@ptrCast(&b));
+    const v = try b.newFilled("a.txt", "x");
+    v.path = try testing.allocator.dupe(u8, "/p/notes/a.txt");
+    const other = try b.newFilled("b.txt", "y");
+    other.path = try testing.allocator.dupe(u8, "/p/notesy/b.txt");
+
+    try b.moved("/p/notes/a.txt", "/p/notes/a.md");
+    try testing.expectEqualStrings("/p/notes/a.md", v.path.?);
+    try testing.expectEqualStrings("a.md", v.name);
+    try testing.expectEqualStrings("Markdown", v.language.name);
+
+    try b.moved("/p/notes", "/p/archive");
+    try testing.expectEqualStrings("/p/archive/a.md", v.path.?);
+    try testing.expectEqualStrings("/p/notesy/b.txt", other.path.?);
 }

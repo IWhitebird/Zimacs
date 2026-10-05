@@ -15,6 +15,11 @@ pub const scrollbar_width: f32 = 12;
 /// A thumb shorter than this is hard to grab.
 const min_thumb: f32 = 24;
 
+/// The folder tree is never dragged narrower than this many columns.
+pub const min_sidebar_columns = 12;
+/// How near the folder tree's right edge the pointer must be to drag it.
+const sidebar_grip: f32 = 4;
+
 /// Keeps the gutter from visibly jumping around in small files.
 const min_digits: u32 = 3;
 
@@ -91,6 +96,15 @@ pub const Layout = struct {
     /// graph view takes over.
     pub fn body(l: Layout) pen.Rectangle {
         return .{ .x = l.gutter.x, .y = l.text.y, .width = l.scrollbar.x + l.scrollbar.width - l.gutter.x, .height = l.text.height };
+    }
+
+    /// Whether `point` is on the folder tree's right edge, which drags to
+    /// resize it.
+    pub fn onSidebarEdge(l: Layout, point: pen.Vector2) bool {
+        if (l.sidebar.width <= 0) return false;
+        const edge = l.sidebar.x + l.sidebar.width;
+        return point.x >= edge - sidebar_grip and point.x <= edge + 1 and
+            point.y >= l.sidebar.y and point.y < l.sidebar.y + l.sidebar.height;
     }
 
     /// How many whole lines fit in the text area.

@@ -138,6 +138,17 @@ pub const Workspace = struct {
         return std.fs.path.join(gpa, &.{ w.root orelse return error.NoFolder, relative });
     }
 
+    /// Whether `relative` names something inside the folder: not absolute,
+    /// and with no empty, `.` or `..` parts.
+    pub fn isInside(relative: []const u8) bool {
+        if (relative.len == 0 or std.fs.path.isAbsolute(relative)) return false;
+        var parts = std.mem.splitAny(u8, relative, "/\\");
+        while (parts.next()) |part| {
+            if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+        }
+        return true;
+    }
+
     /// `path` relative to the root, when it lies inside it.
     pub fn relativeOf(w: *const Self, path: []const u8) ?[]const u8 {
         const root = w.root orelse return null;
@@ -307,6 +318,14 @@ test "opening a folder lists it in the background, and paths map both ways" {
     defer testing.allocator.free(full);
     try testing.expectEqualStrings("src/main.zig", w.relativeOf(full).?);
     try testing.expect(w.relativeOf("/elsewhere/main.zig") == null);
+}
+
+test "only paths that stay inside the folder are inside it" {
+    try testing.expect(Workspace.isInside("notes/today.md"));
+    try testing.expect(Workspace.isInside(".gitignore"));
+    for ([_][]const u8{ "", "/etc/passwd", "../up", "a/../../b", "a//b", "./a" }) |bad| {
+        try testing.expect(!Workspace.isInside(bad));
+    }
 }
 
 test "opening a file instead of a folder is refused" {

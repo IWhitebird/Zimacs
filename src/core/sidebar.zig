@@ -23,6 +23,24 @@ pub const Row = struct {
     open: bool = false,
 };
 
+/// What a right click on the tree picked, for its menu to act on.
+pub const Target = struct {
+    /// Relative to the root; empty for the open folder itself. Owned.
+    path: []u8,
+    folder: bool,
+
+    /// The folder something new is made in: this one, or the one holding
+    /// this file.
+    pub fn folderPath(t: Target) []const u8 {
+        if (t.folder) return t.path;
+        return std.fs.path.dirnamePosix(t.path) orelse "";
+    }
+
+    pub fn isRoot(t: Target) bool {
+        return t.path.len == 0;
+    }
+};
+
 pub const Sidebar = struct {
     gpa: Allocator,
     /// Showing while a folder is open; Ctrl+B hides and shows it.
@@ -34,6 +52,7 @@ pub const Sidebar = struct {
     names: ?std.heap.ArenaAllocator = null,
     /// The first row in view.
     top: usize = 0,
+    target: ?Target = null,
 
     const Self = @This();
 
@@ -53,6 +72,37 @@ pub const Sidebar = struct {
         if (s.names) |*n| n.deinit();
         s.names = null;
         s.top = 0;
+        s.aimAtNothing();
+    }
+
+    /// Picks the file or folder at `row` for the tree menu, or the open
+    /// folder itself when there is no row.
+    pub fn aim(s: *Self, row: ?usize) !void {
+        s.aimAtNothing();
+        const r = if (row) |i| s.rows.items[i] else Row{ .depth = 0, .name = "", .path = "", .folder = true };
+        s.target = .{ .path = try s.gpa.dupe(u8, r.path), .folder = r.folder };
+    }
+
+    fn aimAtNothing(s: *Self) void {
+        if (s.target) |t| s.gpa.free(t.path);
+        s.target = null;
+    }
+
+    /// Opens the folders above `path` so it shows, and `path` itself when
+    /// it is a folder. Takes effect at the next refresh.
+    pub fn reveal(s: *Self, path: []const u8, folder: bool) !void {
+        var end: usize = 0;
+        while (std.mem.findScalarPos(u8, path, end, '/')) |slash| : (end = slash + 1) try s.expand(path[0..slash]);
+        if (folder) try s.expand(path);
+    }
+
+    fn expand(s: *Self, path: []const u8) !void {
+        if (s.expanded.contains(path)) return;
+        const key = try s.gpa.dupe(u8, path);
+        s.expanded.put(s.gpa, key, {}) catch |err| {
+            s.gpa.free(key);
+            return err;
+        };
     }
 
     /// Reads the tree under `root` again, keeping which folders are open.

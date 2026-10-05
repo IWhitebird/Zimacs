@@ -1,7 +1,8 @@
 //! What the menus contain and where each part of them sits: the menu bar,
-//! and the menu a right click on a tab opens.
+//! and the menus a right click on a tab or the folder tree opens.
 //!
-//! The menus are plain data: `bar` and `tab_menu` list them, and picking an
+//! The menus are plain data: `bar`, `tab_menu` and `tree_menu` list them,
+//! and picking an
 //! entry yields an `Action` for `commands.zig` to carry out. Nothing here
 //! draws or touches buffers, so the whole layer can be laid out and
 //! hit-tested in tests.
@@ -31,6 +32,11 @@ pub const Action = enum {
     close_saved,
     close_all,
     copy_path,
+    new_file,
+    new_folder,
+    rename_entry,
+    delete_entry,
+    copy_entry_path,
 
     undo,
     redo,
@@ -154,30 +160,45 @@ pub const tab_menu = [_]Entry{
     .{ .label = "Reopen Closed Tab", .shortcut = "Ctrl+Shift+T", .action = .reopen_tab },
 };
 
+/// What a right click on the folder tree offers, for the file or folder
+/// under it, or the open folder itself.
+pub const tree_menu = [_]Entry{
+    .{ .label = "New File...", .action = .new_file },
+    .{ .label = "New Folder...", .action = .new_folder },
+    .{ .label = "Rename...", .action = .rename_entry },
+    .{ .label = "Delete", .action = .delete_entry },
+    .{ .label = "Copy Path", .action = .copy_entry_path },
+};
+
 /// Gap between an entry's label and its shortcut.
 const shortcut_gap: f32 = 24;
+
+/// A menu a right click opened, and where.
+pub const Context = struct {
+    which: enum { tab, tree },
+    at: pen.Vector2,
+};
 
 pub const Menu = struct {
     /// Which menu of the bar is dropped down, if any.
     open: ?usize = null,
-    /// Where the tab menu was opened, while it is.
-    tab_menu_at: ?pen.Vector2 = null,
+    context: ?Context = null,
     showing_about: bool = false,
 
     /// True while the menu wants the pointer to itself.
     pub fn capturing(m: Menu) bool {
-        return m.open != null or m.tab_menu_at != null or m.showing_about;
+        return m.open != null or m.context != null or m.showing_about;
     }
 
     pub fn close(m: *Menu) void {
         m.open = null;
-        m.tab_menu_at = null;
+        m.context = null;
     }
 
     /// The menu showing, if one is.
     pub fn panel(m: Menu, l: Layout, font: Font) ?Panel {
         if (m.open) |index| return dropdown(index, l, font);
-        if (m.tab_menu_at) |at| return tabMenu(at, l, font);
+        if (m.context) |c| return contextMenu(c, l, font);
         return null;
     }
 };
@@ -269,10 +290,14 @@ pub fn dropdown(index: usize, l: Layout, font: Font) Panel {
     return .{ .entries = bar[index].entries, .origin = .{ .x = anchor.x, .y = anchor.y + anchor.height } };
 }
 
-/// The tab menu, opened at `at` and moved in as far as it takes to keep it
-/// inside the window.
-pub fn tabMenu(at: pen.Vector2, l: Layout, font: Font) Panel {
-    var p = Panel{ .entries = &tab_menu, .origin = at };
+/// A right-click menu, opened where it was asked for and moved in as far
+/// as it takes to keep it inside the window.
+pub fn contextMenu(c: Context, l: Layout, font: Font) Panel {
+    const at = c.at;
+    var p = Panel{ .entries = switch (c.which) {
+        .tab => &tab_menu,
+        .tree => &tree_menu,
+    }, .origin = at };
     const box = p.rect(font);
     p.origin.x = @max(@min(at.x, l.menu.width - box.width), 0);
     p.origin.y = @max(@min(at.y, l.status.y + l.status.height - box.height), 0);
@@ -309,7 +334,12 @@ test "every action is in some menu, and no menu lists one twice" {
         for (tab_menu) |entry| {
             if (entry.action == action) in_tab_menu += 1;
         }
-        try testing.expect(in_bar <= 1 and in_tab_menu <= 1 and in_bar + in_tab_menu >= 1);
+        var in_tree_menu: usize = 0;
+        for (tree_menu) |entry| {
+            if (entry.action == action) in_tree_menu += 1;
+        }
+        try testing.expect(in_bar <= 1 and in_tab_menu <= 1 and in_tree_menu <= 1);
+        try testing.expect(in_bar + in_tab_menu + in_tree_menu >= 1);
     }
 }
 
@@ -384,18 +414,18 @@ test "capturing follows the open state" {
     m.showing_about = true;
     try testing.expect(m.capturing());
     m.showing_about = false;
-    m.tab_menu_at = .{ .x = 10, .y = 10 };
+    m.context = .{ .which = .tab, .at = .{ .x = 10, .y = 10 } };
     try testing.expect(m.capturing());
     m.close();
     try testing.expect(!m.capturing());
 }
 
-test "the tab menu opens at the pointer but stays inside the window" {
+test "a right-click menu opens at the pointer but stays inside the window" {
     const font = Font{ .metrics = .{ .width = 8, .height = 16 } };
     const l = testLayout();
-    const here = tabMenu(.{ .x = 50, .y = 30 }, l, font);
+    const here = contextMenu(.{ .which = .tab, .at = .{ .x = 50, .y = 30 } }, l, font);
     try testing.expectEqual(@as(f32, 50), here.origin.x);
-    const corner = tabMenu(.{ .x = 790, .y = 440 }, l, font).rect(font);
+    const corner = contextMenu(.{ .which = .tree, .at = .{ .x = 790, .y = 440 } }, l, font).rect(font);
     try testing.expect(corner.x + corner.width <= l.menu.width);
     try testing.expect(corner.y + corner.height <= l.status.y + l.status.height);
 }

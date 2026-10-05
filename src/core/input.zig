@@ -44,9 +44,31 @@ const Drag = union(enum) {
     text: struct { from: pen.Vector2, moved: bool = false },
     vertical_bar,
     horizontal_bar,
+    /// The folder tree's right edge, resizing it.
+    sidebar_edge,
 };
 var drag: Drag = .none;
 var caption = Caption{};
+
+/// The pointer's shape, worked out afresh each frame and set once at its
+/// end: raylib makes a new system cursor on every set.
+const Pointer = struct {
+    current: pen.MouseCursor = .default,
+    wanted: pen.MouseCursor = .default,
+
+    fn want(p: *Pointer, shape: pen.MouseCursor) void {
+        p.wanted = shape;
+    }
+
+    fn apply(p: *Pointer) void {
+        if (p.wanted != p.current) {
+            p.current = p.wanted;
+            pen.setMouseCursor(p.wanted);
+        }
+        p.wanted = .default;
+    }
+};
+var pointer = Pointer{};
 
 pub const Input = struct {
     const Self = @This();
@@ -71,6 +93,7 @@ pub const Input = struct {
 
     pub fn render(ctx: *anyopaque) !void {
         _ = ctx;
+        defer pointer.apply();
         // First, so prompts and panels never block moving or closing.
         if (caption.handle()) return;
         if (try DialogInput.handle()) return;
@@ -96,8 +119,6 @@ const Caption = struct {
     /// A button fires only if released over the button it was pressed on.
     armed: ?titlebar.Button = null,
     last_press: f64 = -1,
-    /// raylib creates a new system cursor on every set, so only set changes.
-    cursor: pen.MouseCursor = .default,
 
     /// True when it has taken this frame's pointer.
     fn handle(c: *Caption) bool {
@@ -112,7 +133,7 @@ const Caption = struct {
         const l = editor.currentLayout();
         const point = pen.getMousePosition();
         const edges = if (pen.isWindowMaximized()) titlebar.Edges{} else titlebar.edgesAt(point, l);
-        c.setCursor(if (edges.any()) edges.cursor() else .default);
+        if (edges.any()) pointer.want(edges.cursor());
 
         if (pen.isMouseButtonPressed(.left)) return c.press(point, l, edges);
         if (c.armed) |armed| {
@@ -150,12 +171,6 @@ const Caption = struct {
             w.beginMove();
         }
         return true;
-    }
-
-    fn setCursor(c: *Caption, shape: pen.MouseCursor) void {
-        if (shape == c.cursor) return;
-        c.cursor = shape;
-        pen.setMouseCursor(shape);
     }
 };
 
@@ -355,7 +370,7 @@ fn handleMenu() !bool {
 
     if (menu_mod.titleAt(point, l, app.font)) |index| {
         if (clicked) {
-            app.menu.tab_menu_at = null;
+            app.menu.context = null;
             app.menu.open = if (app.menu.open == index) null else index;
         } else if (app.menu.open != null) {
             // Sliding across the bar with one menu open opens the next, the
@@ -640,12 +655,26 @@ fn mouse() !void {
         if (pen.isMouseButtonPressed(.right)) {
             app.buffer.select(index);
             app.graph.hide();
-            app.menu.tab_menu_at = point;
+            app.menu.context = .{ .which = .tab, .at = point };
             return;
         }
     }
 
+    // The tree's right edge drags to resize it.
+    const on_edge = l.onSidebarEdge(point);
+    if (on_edge or drag == .sidebar_edge) pointer.want(.resize_ew);
+    if (pen.isMouseButtonPressed(.right) and pen.checkCollisionPointRec(point, l.sidebar)) {
+        const cell = app.font.metrics;
+        app.sidebar.aim(app.sidebar.rowAt(layout_mod.sidebarRowsTop(l, cell), layout_mod.listRowHeight(cell), point.y)) catch return;
+        app.menu.context = .{ .which = .tree, .at = point };
+        return;
+    }
+
     if (pen.isMouseButtonPressed(.left)) {
+        if (on_edge) {
+            drag = .sidebar_edge;
+            return;
+        }
         if (pen.checkCollisionPointRec(point, l.sidebar)) return clickSidebar(point, l);
         if (app.buffer.current() == null) return clickWelcome(point, l);
         if (pen.checkCollisionPointRec(point, app.editor.tabs.newRect(l.tabs))) return commands.run(.new_tab);
@@ -686,11 +715,13 @@ fn mouse() !void {
 
     // Also ends a drag whose release something else, such as a dialog, took.
     if (!pen.isMouseButtonDown(.left)) {
+        if (drag == .sidebar_edge) commands.sidebarResized();
         drag = .none;
         return;
     }
     switch (drag) {
         .none => {},
+        .sidebar_edge => commands.resizeSidebar(point.x - l.sidebar.x),
         .vertical_bar => scrollTo(point, l),
         .horizontal_bar => scrollSidewaysTo(point, l),
         .text => |*t| {
@@ -723,7 +754,7 @@ fn graphInput() !void {
         if (g.release()) |index| commands.openGraphNode(index);
         return;
     }
-    if (!pen.checkCollisionPointRec(point, area)) return mouse();
+    if (drag != .none or !pen.checkCollisionPointRec(point, area)) return mouse();
     const wheel = pen.getMouseWheelMove();
     if (wheel != 0) g.zoomAt(point, area, wheel);
     if (pen.isMouseButtonPressed(.left)) g.press(point, area);
@@ -971,6 +1002,9 @@ fn commitPrompt() !void {
         .quick_open, .backlinks => commands.openInFolder(chosen),
         .command => if (option) |i| try commands.runFromPalette(i),
         .link_note => try commands.insertLink(chosen),
+        .new_file => commands.createEntry(chosen, false),
+        .new_folder => commands.createEntry(chosen, true),
+        .rename => commands.renameEntry(chosen),
         .search_folder => if (option) |hit| commands.openHit(hit),
         .save_as => {
             const view = app.buffer.current() orelse return;

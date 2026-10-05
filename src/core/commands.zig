@@ -31,6 +31,8 @@ const wikilink = @import("wikilink.zig");
 const editor = @import("editor.zig");
 const mcp = @import("mcp.zig");
 const settings_mod = @import("settings.zig");
+const Workspace = @import("workspace.zig").Workspace;
+const layout = @import("layout.zig");
 const Setting = settings_mod.Setting;
 const theme = @import("theme.zig");
 
@@ -55,6 +57,11 @@ pub fn run(action: Action) !void {
         .close_saved => try closeTabs(.saved),
         .close_all => try closeTabs(.all),
         .copy_path => copyPath(),
+        .new_file => try newEntry(.new_file),
+        .new_folder => try newEntry(.new_folder),
+        .rename_entry => if (app.sidebar.target) |t| try app.prompt.begin(.rename, t.path),
+        .delete_entry => if (app.sidebar.target) |t| app.dialog.ask(.{ .delete_entry = std.fs.path.basenamePosix(t.path) }),
+        .copy_entry_path => copyEntryPath(),
         .settings => app.settings.open(),
         .open_config => try openConfig(),
         .check_updates => checkForUpdates(),
@@ -202,7 +209,10 @@ pub fn requestClose(index: usize) !void {
 pub fn answer(a: dialog_mod.Answer) !void {
     const q = app.dialog.question orelse return;
     app.dialog.close();
-    const view = q.view();
+    const view = switch (q) {
+        .close_unsaved, .changed_on_disk => |v| v,
+        .delete_entry => return if (a == .delete) deleteEntry(),
+    };
     const index = app.buffer.indexOf(view) orelse return;
     switch (a) {
         .save => if (view.path == null) {
@@ -218,6 +228,7 @@ pub fn answer(a: dialog_mod.Answer) !void {
         .reload => app.buffer.reload(view) catch |err| report("Could not reload", err),
         .keep => app.buffer.acknowledgeDisk(view),
         .cancel => stopClosing(),
+        .delete => {},
     }
 }
 
@@ -543,6 +554,105 @@ pub fn openGraphNode(index: u32) void {
     app.openFile(path) catch |err| report("Could not open", err);
 }
 
+// ------------------------------------------------------------- the tree
+
+/// Asks for the name of a file or folder to make, starting in the folder
+/// the tree menu was opened on.
+fn newEntry(kind: @import("prompt.zig").Kind) !void {
+    const t = app.sidebar.target orelse return;
+    const folder = t.folderPath();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const start = if (folder.len > 0) std.fmt.bufPrint(&buf, "{s}/", .{folder}) catch "" else "";
+    try app.prompt.begin(kind, start);
+}
+
+/// Makes the file or folder named in the prompt, relative to the open
+/// folder, and opens a file in a tab.
+pub fn createEntry(typed: []const u8, folder: bool) void {
+    const io = app.io orelse return;
+    const relative = std.mem.trimEnd(u8, typed, "/");
+    const full = entryPath(io, relative) orelse return;
+    defer app.gpa.free(full);
+    const dir = std.Io.Dir.cwd();
+    if (folder) {
+        dir.createDirPath(io, full) catch |err| return report("Could not make the folder", err);
+    } else {
+        if (std.fs.path.dirname(full)) |parent| dir.createDirPath(io, parent) catch |err| return report("Could not make the file", err);
+        const file = dir.createFile(io, full, .{ .exclusive = true }) catch |err| return report("Could not make the file", err);
+        file.close(io);
+    }
+    app.sidebar.reveal(relative, folder) catch {};
+    treeChanged(io);
+    if (!folder) app.openFile(full) catch |err| report("Could not open", err);
+}
+
+/// Renames the tree menu's file or folder to the path in the prompt,
+/// taking any of its open tabs along.
+pub fn renameEntry(typed: []const u8) void {
+    const io = app.io orelse return;
+    const t = app.sidebar.target orelse return;
+    const relative = std.mem.trimEnd(u8, typed, "/");
+    if (std.mem.eql(u8, relative, t.path)) return;
+    const new = entryPath(io, relative) orelse return;
+    defer app.gpa.free(new);
+    const old = app.workspace.absolute(app.gpa, t.path) catch |err| return report("Could not rename", err);
+    defer app.gpa.free(old);
+    const dir = std.Io.Dir.cwd();
+    if (std.fs.path.dirname(new)) |parent| dir.createDirPath(io, parent) catch |err| return report("Could not rename", err);
+    std.Io.Dir.rename(dir, old, dir, new, io) catch |err| return report("Could not rename", err);
+    app.buffer.moved(old, new) catch |err| report("Could not follow the rename in its tab", err);
+    app.sidebar.reveal(relative, t.folder) catch {};
+    treeChanged(io);
+}
+
+/// Deletes the tree menu's file or folder, once the dialog has asked.
+fn deleteEntry() void {
+    const io = app.io orelse return;
+    const t = app.sidebar.target orelse return;
+    if (t.isRoot()) return;
+    const full = app.workspace.absolute(app.gpa, t.path) catch |err| return report("Could not delete", err);
+    defer app.gpa.free(full);
+    const dir = std.Io.Dir.cwd();
+    (if (t.folder) dir.deleteTree(io, full) else dir.deleteFile(io, full)) catch |err| return report("Could not delete", err);
+    tell(.info, "Deleted {s}", .{t.path});
+    treeChanged(io);
+}
+
+fn copyEntryPath() void {
+    const t = app.sidebar.target orelse return;
+    const full = app.workspace.absolute(app.gpa, t.path) catch return;
+    defer app.gpa.free(full);
+    const text = app.gpa.dupeZ(u8, full) catch return;
+    defer app.gpa.free(text);
+    pen.setClipboardText(text);
+    tell(.info, "Copied {s}", .{full});
+}
+
+/// The full path of a new name typed for the tree, after checking it stays
+/// in the folder and is not taken. Caller frees.
+fn entryPath(io: std.Io, relative: []const u8) ?[]u8 {
+    if (!Workspace.isInside(relative)) {
+        tell(.problem, "\"{s}\" is not a name inside the folder", .{relative});
+        return null;
+    }
+    const full = app.workspace.absolute(app.gpa, relative) catch |err| {
+        report("Could not use that name", err);
+        return null;
+    };
+    if (std.Io.Dir.cwd().access(io, full, .{})) |_| {
+        tell(.problem, "{s} already exists", .{relative});
+        app.gpa.free(full);
+        return null;
+    } else |_| return full;
+}
+
+/// Shows a change to the folder's files in the tree, and everywhere else
+/// the folder's listing is used.
+fn treeChanged(io: std.Io) void {
+    app.refreshSidebar();
+    app.workspace.refresh(io);
+}
+
 /// Whether a folder is open, saying how to open one when it is not.
 fn folderOpen() bool {
     if (app.io == null) {
@@ -806,11 +916,29 @@ pub fn changeSetting(s: Setting, delta: i32) void {
     const before = app.config;
     settings_mod.change(&app.config, s, delta);
     applySettings(before);
+    var buf: [32]u8 = undefined;
+    storeSetting(@tagName(s), settings_mod.stored(&app.config, s, &buf));
+}
+
+/// Writes one setting into the settings file, keeping the rest of it.
+fn storeSetting(key: []const u8, value: []const u8) void {
     const io = app.io orelse return;
     const path = app.config_path orelse return;
-    var buf: [32]u8 = undefined;
-    config_mod.store(io, app.gpa, path, @tagName(s), settings_mod.stored(&app.config, s, &buf)) catch |err|
-        report("Could not save the setting", err);
+    config_mod.store(io, app.gpa, path, key, value) catch |err| report("Could not save the setting", err);
+}
+
+/// Sets the folder tree's width as its edge is dragged to `width` pixels,
+/// never past half the window.
+pub fn resizeSidebar(width: f32) void {
+    const column = app.font.metrics.width;
+    const most = @max(@as(f32, @floatFromInt(pen.getScreenWidth())) / 2 / column, layout.min_sidebar_columns);
+    app.config.sidebar_columns = @intFromFloat(std.math.clamp(@round(width / column), layout.min_sidebar_columns, most));
+}
+
+/// Keeps the width the folder tree was dragged to.
+pub fn sidebarResized() void {
+    var buf: [8]u8 = undefined;
+    storeSetting("sidebar_columns", std.fmt.bufPrint(&buf, "{d}", .{app.config.sidebar_columns}) catch return);
 }
 
 /// Makes the editor match `app.config` where it differs from `before`.
@@ -856,6 +984,7 @@ pub fn enabled(action: Action) bool {
         } else false,
         .copy_path => if (app.buffer.current()) |v| v.path != null else false,
         .reopen_tab => app.buffer.closed.items.len > 0,
+        .rename_entry, .delete_entry => if (app.sidebar.target) |t| !t.isRoot() else false,
         else => true,
     };
 }
