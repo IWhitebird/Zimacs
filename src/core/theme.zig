@@ -27,6 +27,7 @@ pub const Theme = struct {
     close_hover: pen.Color,
     close_hover_text: pen.Color,
     find_match: pen.Color,
+    selection_match: pen.Color,
     bracket_match: pen.Color,
     syntax_keyword: pen.Color,
     syntax_string: pen.Color,

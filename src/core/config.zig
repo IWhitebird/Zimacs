@@ -31,6 +31,7 @@ pub const Colors = struct {
     close_hover: u24 = 0xC42B1C,
     close_hover_text: u24 = 0xFFFFFF,
     find_match: u24 = 0x5C3F12,
+    selection_match: u24 = 0x2F3B48,
     bracket_match: u24 = 0x3B4252,
     syntax_keyword: u24 = 0xC586C0,
     syntax_string: u24 = 0xCE9178,

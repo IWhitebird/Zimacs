@@ -23,6 +23,7 @@ const wrap = @import("wrap.zig");
 const update_mod = @import("update.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const BufferView = @import("buffer.zig").BufferView;
+const PieceTree = @import("piecetree.zig").PieceTree;
 const Metrics = @import("font.zig").Metrics;
 const Layout = layout.Layout;
 const Range = @import("cursor.zig").Range;
@@ -42,6 +43,10 @@ pub const Editor = struct {
     row_lines: std.ArrayList(?u32) = .empty,
     /// Search matches on screen this frame.
     matches: std.ArrayList(search.Match) = .empty,
+    /// Other places on screen holding the selected text.
+    selection_matches: std.ArrayList(search.Match) = .empty,
+    /// The lines on screen, copied to look for the selection in.
+    on_screen: std.ArrayList(u8) = .empty,
     /// Where the rows of the line being drawn start, while lines are folded:
     /// as screen columns, and as byte offsets into the line.
     starts: std.ArrayList(u32) = .empty,
@@ -88,6 +93,8 @@ pub const Editor = struct {
         e.status.deinit(app.gpa);
         e.row_lines.deinit(app.gpa);
         e.matches.deinit(app.gpa);
+        e.selection_matches.deinit(app.gpa);
+        e.on_screen.deinit(app.gpa);
         e.starts.deinit(app.gpa);
         e.row_bytes.deinit(app.gpa);
         e.kinds.deinit(app.gpa);
@@ -240,6 +247,7 @@ pub const Editor = struct {
 
         e.row_lines.clearRetainingCapacity();
         try e.collectMatches(view, rows);
+        try e.collectSelectionMatches(view, rows);
         const pair = if (selection == null) e.bracketsAround(view) else null;
         // Another slice of parsing, if the tree is behind the text.
         if (view.syntax) |s| s.step(&view.tree);
@@ -288,6 +296,10 @@ pub const Editor = struct {
                 for (e.matches.items) |m| {
                     const range = Range{ .start = @intCast(m.start), .end = @intCast(m.end) };
                     e.drawSpan(view, l, cell, shown, range, theme.current.find_match);
+                }
+                for (e.selection_matches.items) |m| {
+                    const range = Range{ .start = @intCast(m.start), .end = @intCast(m.end) };
+                    e.drawSpan(view, l, cell, shown, range, theme.current.selection_match);
                 }
                 if (selection) |range| {
                     e.drawSpan(view, l, cell, shown, range, theme.current.selection);
@@ -374,6 +386,39 @@ pub const Editor = struct {
         try f.sync(view);
         const last = @min(view.top_line + rows, view.tree.lineCount() - 1);
         try f.matchesIn(view.tree.lineStart(view.top_line), view.tree.lineEnd(last), &e.matches);
+    }
+
+    /// The other places on screen with the selected text, when it is part
+    /// of one line and not only spaces. A whole word matches whole words.
+    /// Left alone while the find bar is marking its own matches.
+    fn collectSelectionMatches(e: *Self, view: *BufferView, rows: u32) !void {
+        e.selection_matches.clearRetainingCapacity();
+        if (app.find.open and app.find.query.value().len > 0) return;
+        const sel = view.cursor.selection() orelse return;
+        if (sel.len() > max_selection_match) return;
+        const tree = &view.tree;
+        const start = tree.lineStart(view.top_line);
+        const end = tree.lineEnd(@min(view.top_line + rows, tree.lineCount() - 1));
+        if (end - start > max_selection_scan) return;
+
+        e.on_screen.clearRetainingCapacity();
+        try tree.copy(sel.start, sel.len(), &e.on_screen);
+        const needle_len = e.on_screen.items.len;
+        if (std.mem.findScalar(u8, e.on_screen.items, '\n') != null) return;
+        if (std.mem.trim(u8, e.on_screen.items, " \t").len == 0) return;
+        // A whole word selected matches whole words; part of one matches
+        // anywhere.
+        var whole_word = !isWordAt(tree, sel.start -% 1) and !isWordAt(tree, sel.end);
+        for (e.on_screen.items) |c| whole_word = whole_word and text.isWord(c);
+
+        try tree.copy(start, end - start, &e.on_screen);
+        const needle = e.on_screen.items[0..needle_len];
+        const hay = e.on_screen.items[needle_len..];
+        var at: usize = 0;
+        while (search.next(hay, needle, at, .{ .match_case = true, .whole_word = whole_word })) |m| : (at = m.end) {
+            if (start + m.start == sel.start) continue;
+            try e.selection_matches.append(app.gpa, .{ .start = start + m.start, .end = start + m.end });
+        }
     }
 
     /// Paints the part of a byte range that falls on one screen row.
@@ -1012,6 +1057,15 @@ fn drawPanel(panel: menu.Panel, cell: Metrics, point: pen.Vector2) void {
 
 const about_capacity = 12;
 var about_storage: [about_capacity][160]u8 = undefined;
+
+fn isWordAt(tree: *const PieceTree, offset: u32) bool {
+    return if (tree.byteAt(offset)) |c| text.isWord(c) else false;
+}
+
+/// Longer selections are not looked for elsewhere on screen.
+const max_selection_match = 256;
+/// Nor in a screen holding more text than this, such as one huge line.
+const max_selection_scan = 256 * 1024;
 
 /// Room for the prompt's line once fitted to the panel.
 const prompt_line_capacity = 2048;
