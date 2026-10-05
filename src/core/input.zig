@@ -530,7 +530,7 @@ fn windowShortcuts() !void {
     selectTabByNumber();
 
     if (pressed(.b)) try commands.run(if (shift) .backlinks else .toggle_sidebar);
-    if (pressed(.p)) try commands.run(.quick_open);
+    if (pressed(.p)) try commands.run(if (shift) .command_palette else .quick_open);
     if (pressed(.n)) try commands.run(.new_tab);
     if (pressed(.t) and shift) try commands.run(.reopen_tab);
     if (pressed(.w)) try commands.run(.close_tab);
@@ -929,6 +929,7 @@ fn commitPrompt() !void {
         .recent => app.openPath(chosen) catch |err| report("Could not open", err),
         .open_folder => app.openFolder(chosen) catch |err| report("Could not open the folder", err),
         .quick_open, .backlinks => commands.openInFolder(chosen),
+        .command => if (option) |i| try commands.runFromPalette(i),
         .link_note => try commands.insertLink(chosen),
         .search_folder => if (option) |hit| commands.openHit(hit),
         .save_as => {

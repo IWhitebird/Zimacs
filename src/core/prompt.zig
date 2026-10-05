@@ -7,7 +7,7 @@ const text_mod = @import("text.zig");
 const fuzzy = @import("fuzzy.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { open, recent, open_folder, quick_open, search_folder, link_note, backlinks, save_as, browse, save_into, goto_line };
+pub const Kind = enum { open, recent, open_folder, quick_open, command, search_folder, link_note, backlinks, save_as, browse, save_into, goto_line };
 
 /// Case-insensitive substring test, for narrowing the suggestion list.
 fn contains(haystack: []const u8, needle: []const u8) bool {
@@ -83,7 +83,7 @@ pub const Prompt = struct {
     fn refilter(p: *Self) !void {
         p.matches.clearRetainingCapacity();
         switch (p.kind) {
-            .quick_open => try p.rank(),
+            .quick_open, .command => try p.rank(),
             // The typed text is what was searched for, not a filter.
             .search_folder => for (0..p.options.len) |i| try p.matches.append(p.gpa, i),
             else => for (p.options, 0..) |option, i| {
@@ -186,6 +186,7 @@ pub const Prompt = struct {
             .recent => "Open recent: ",
             .open_folder => "Open folder: ",
             .quick_open => "Go to file: ",
+            .command => "Command: ",
             .search_folder => "Search folder: ",
             .link_note => "Link to: ",
             .backlinks => "Linked from: ",

@@ -734,12 +734,13 @@ pub const Editor = struct {
                 text.fitStart(&fitted_buf, whole, columns);
             e.status.clearRetainingCapacity();
             try e.status.appendSlice(app.gpa, shown_part);
-            app.font.draw(
-                try terminate(&e.status),
-                rect.x + layout.padding,
-                rect.y + (rect.height - cell.height) / 2,
-                if (hot) theme.current.tab_text_active else theme.current.status_text,
-            );
+            const y = rect.y + (rect.height - cell.height) / 2;
+            app.font.draw(try terminate(&e.status), rect.x + layout.padding, y, if (hot) theme.current.tab_text_active else theme.current.status_text);
+            // A command's keys go at the right.
+            if (app.prompt.kind == .command) {
+                const keys = commands.paletteShortcut(option);
+                if (keys.len > 0) app.font.draw(keys, layout.rightAlign(rect, app.font.widthOf(keys)), y, theme.current.gutter_text);
+            }
         }
     }
 

@@ -8,7 +8,8 @@ const pen = @import("raylib");
 const app = @import("../zimacs.zig");
 const buffer_mod = @import("buffer.zig");
 const BufferView = buffer_mod.BufferView;
-const Action = @import("menu.zig").Action;
+const menu = @import("menu.zig");
+const Action = menu.Action;
 const browser_mod = @import("browser.zig");
 const update_mod = @import("update.zig");
 const find_mod = @import("find.zig");
@@ -56,6 +57,7 @@ pub fn run(action: Action) !void {
         .report_problem => reportProblem(),
         .copy_mcp_command => copyMcpCommand(),
         .about => app.menu.showing_about = true,
+        .command_palette => try openPalette(),
 
         .save => try save(),
         .save_as => try browseToSave(false),
@@ -349,6 +351,33 @@ fn newChoices() std.mem.Allocator {
     _ = choice_arena.reset(.retain_capacity);
     choices = .empty;
     return choice_arena.allocator();
+}
+
+/// The commands the palette offers, in the order of `choices`.
+var palette: std.ArrayList(menu.Entry) = .empty;
+
+/// Every command that can run now, by menu and name, picked by a few letters.
+fn openPalette() !void {
+    const a = newChoices();
+    palette = .empty;
+    for (menu.bar) |group| for (group.entries) |entry| try offer(a, group.title, entry);
+    for (menu.tab_menu) |entry| if (menu.entryFor(entry.action) == null) try offer(a, "Tab", entry);
+    try app.prompt.beginWith(.command, choices.items);
+}
+
+fn offer(a: std.mem.Allocator, group: []const u8, entry: menu.Entry) !void {
+    if (entry.action == .command_palette or !enabled(entry.action)) return;
+    try choices.append(a, try std.fmt.allocPrint(a, "{s}: {s}", .{ group, entry.label }));
+    try palette.append(a, entry);
+}
+
+/// The keys for palette entry `option`, or none.
+pub fn paletteShortcut(option: usize) [:0]const u8 {
+    return if (option < palette.items.len) palette.items[option].shortcut else "";
+}
+
+pub fn runFromPalette(option: usize) !void {
+    if (option < palette.items.len) try run(palette.items[option].action);
 }
 
 /// The folders, each with a separator after it to tell it apart, then the

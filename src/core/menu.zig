@@ -54,6 +54,7 @@ pub const Action = enum {
     toggle_comment,
     goto_line,
 
+    command_palette,
     toggle_wrap,
     toggle_sidebar,
     backlinks,
@@ -121,6 +122,7 @@ pub const bar = [_]Group{
         .{ .label = "Toggle Comment", .shortcut = "Ctrl+/", .action = .toggle_comment },
     } },
     .{ .title = "View", .entries = &.{
+        .{ .label = "Command Palette...", .shortcut = "Ctrl+Shift+P", .action = .command_palette },
         .{ .label = "Word Wrap", .shortcut = "Alt+Z", .action = .toggle_wrap, .checkable = true },
         .{ .label = "Folder Tree", .shortcut = "Ctrl+B", .action = .toggle_sidebar, .checkable = true },
         .{ .label = "Backlinks", .shortcut = "Ctrl+Shift+B", .action = .backlinks },
