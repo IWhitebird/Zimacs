@@ -104,8 +104,6 @@ pub const bar = [_]Group{
         .{ .label = "Save As...", .shortcut = "Ctrl+Shift+S", .action = .save_as },
         .{ .label = "Close Tab", .shortcut = "Ctrl+W", .action = .close_tab },
         .{ .label = "Close All Tabs", .action = .close_all },
-        .{ .label = "Settings...", .shortcut = "Ctrl+,", .action = .settings },
-        .{ .label = "Open Settings File", .action = .open_config },
     } },
     .{ .title = "Edit", .entries = &.{
         .{ .label = "Undo", .shortcut = "Ctrl+Z", .action = .undo },
@@ -141,6 +139,8 @@ pub const bar = [_]Group{
         .{ .label = "Reset Zoom", .shortcut = "Ctrl+0", .action = .zoom_reset },
     } },
     .{ .title = "Help", .entries = &.{
+        .{ .label = "Settings...", .shortcut = "Ctrl+,", .action = .settings },
+        .{ .label = "Open Settings File", .action = .open_config },
         .{ .label = "Check for Updates", .action = .check_updates },
         .{ .label = "Report a Problem", .action = .report_problem },
         .{ .label = "Copy MCP Command (Beta)", .action = .copy_mcp_command },
