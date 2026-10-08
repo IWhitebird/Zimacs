@@ -110,7 +110,7 @@ pub const Input = struct {
         moveCursor();
         try typeText();
         try mouse();
-        scroll();
+        try scroll();
     }
 };
 
@@ -922,9 +922,22 @@ fn scrollSidewaysTo(point: pen.Vector2, l: layout_mod.Layout) void {
     );
 }
 
-fn scroll() void {
+/// Wheel movement made with Ctrl held that has not yet added up to a
+/// whole step of zoom: a touchpad sends it a little at a time.
+var zoom_wheel: f32 = 0;
+
+fn scroll() !void {
     const wheel = pen.getMouseWheelMove();
     if (wheel == 0) return;
+    // With Ctrl the wheel changes the text size, as in a browser.
+    if (ctrlDown()) {
+        zoom_wheel += wheel;
+        while (@abs(zoom_wheel) >= 1) {
+            try commands.run(if (zoom_wheel > 0) .zoom_in else .zoom_out);
+            zoom_wheel -= std.math.sign(zoom_wheel);
+        }
+        return;
+    }
     // Wheel up is positive and should move toward the start of the file.
     // Over the tab bar the wheel scrolls the tabs instead, and over the
     // folder tree the tree.
