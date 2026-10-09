@@ -413,7 +413,8 @@ fn openRecent() !void {
 /// backlinks follow.
 fn isFolderNote(view: *const BufferView) bool {
     const path = view.path orelse return false;
-    return wikilink.isNote(path) and app.workspace.relativeOf(path) != null;
+    var buf: Workspace.PathBuf = undefined;
+    return wikilink.isNote(path) and app.workspace.relativeOf(path, &buf) != null;
 }
 
 /// Opens the note a link names, first making it if no file has it yet.
@@ -430,7 +431,8 @@ pub fn followLink(view: *const BufferView, written: []const u8) void {
 /// The file a link in `from` means: one the folder has, or where a new note
 /// for it goes. Caller frees.
 fn linkedPath(from: []const u8, target: []const u8) ![]u8 {
-    if (app.workspace.relativeOf(from)) |relative| {
+    var buf: Workspace.PathBuf = undefined;
+    if (app.workspace.relativeOf(from, &buf)) |relative| {
         const files = app.workspace.files();
         if (wikilink.resolve(files, target, relative)) |i| return app.workspace.absolute(app.gpa, files[i]);
         const made = try wikilink.newNotePath(app.gpa, target, relative);
@@ -490,7 +492,8 @@ fn showBacklinks() !void {
     const view = app.buffer.current() orelse return;
     if (!isFolderNote(view)) return tell(.info, "Backlinks are for Markdown notes in the open folder", .{});
     const graph = app.workspace.notes();
-    const note = graph.find(app.workspace.relativeOf(view.path.?).?) orelse return tell(.info, no_backlinks, .{});
+    var buf: Workspace.PathBuf = undefined;
+    const note = graph.find(app.workspace.relativeOf(view.path.?, &buf).?) orelse return tell(.info, no_backlinks, .{});
     var from: std.ArrayList(u32) = .empty;
     defer from.deinit(app.gpa);
     try graph.backlinks(app.gpa, note, &from);
@@ -512,7 +515,8 @@ fn toggleGraph() void {
 fn showGraph() void {
     if (!folderOpen()) return;
     const view = app.buffer.current();
-    const path = if (view) |v| if (v.path) |p| app.workspace.relativeOf(p) else null else null;
+    var buf: Workspace.PathBuf = undefined;
+    const path = if (view) |v| if (v.path) |p| app.workspace.relativeOf(p, &buf) else null else null;
     app.graph.show(path, editor.currentLayout().body()) catch |err| return report("Could not draw the graph", err);
     app.workspace.refresh(app.io.?);
 }
@@ -703,14 +707,24 @@ pub fn searchQueryEdited() void {
 
     var unsaved: std.ArrayList(foldersearch.Unsaved) = .empty;
     defer {
-        for (unsaved.items) |u| app.gpa.free(u.text);
+        for (unsaved.items) |u| {
+            app.gpa.free(u.path);
+            app.gpa.free(u.text);
+        }
         unsaved.deinit(app.gpa);
     }
+    var buf: Workspace.PathBuf = undefined;
     for (app.buffer.views.items) |view| {
         if (!view.edited()) continue;
-        const relative = app.workspace.relativeOf(view.path orelse continue) orelse continue;
-        const text = view.tree.allocText(app.gpa) catch continue;
-        unsaved.append(app.gpa, .{ .path = relative, .text = text }) catch app.gpa.free(text);
+        const relative = app.gpa.dupe(u8, app.workspace.relativeOf(view.path orelse continue, &buf) orelse continue) catch continue;
+        const text = view.tree.allocText(app.gpa) catch {
+            app.gpa.free(relative);
+            continue;
+        };
+        unsaved.append(app.gpa, .{ .path = relative, .text = text }) catch {
+            app.gpa.free(relative);
+            app.gpa.free(text);
+        };
     }
     app.folder_search.start(io, root, app.workspace.files(), unsaved.items, app.prompt.text(), .{}) catch |err|
         report("Could not search", err);

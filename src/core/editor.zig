@@ -24,6 +24,7 @@ const update_mod = @import("update.zig");
 const Artifact = @import("artifact.zig").Artifact;
 const BufferView = @import("buffer.zig").BufferView;
 const PieceTree = @import("piecetree.zig").PieceTree;
+const Workspace = @import("workspace.zig").Workspace;
 const Metrics = @import("font.zig").Metrics;
 const Layout = layout.Layout;
 const Range = @import("cursor.zig").Range;
@@ -580,7 +581,8 @@ pub const Editor = struct {
         const heading = std.fmt.bufPrintZ(&label_buf, "{s}", .{app.workspace.name()}) catch "";
         app.font.draw(heading, l.sidebar.x + layout.padding, l.sidebar.y + inset, t.hint);
 
-        const active = if (app.buffer.current()) |v| if (v.path) |p| app.workspace.relativeOf(p) else null else null;
+        var active_buf: Workspace.PathBuf = undefined;
+        const active = if (app.buffer.current()) |v| if (v.path) |p| app.workspace.relativeOf(p, &active_buf) else null else null;
         const point = pen.getMousePosition();
         const indent = cell.width * sidebar_indent_columns;
         var y = layout.sidebarRowsTop(l, cell);
@@ -839,7 +841,8 @@ pub const Editor = struct {
     /// The graph's dot for the note in front, if it is one.
     fn currentNote() ?u32 {
         const view = app.buffer.current() orelse return null;
-        return app.graph.find(app.workspace.relativeOf(view.path orelse return null) orelse return null);
+        var buf: Workspace.PathBuf = undefined;
+        return app.graph.find(app.workspace.relativeOf(view.path orelse return null, &buf) orelse return null);
     }
 
     /// With no tab open: buttons to start, and what was opened lately.

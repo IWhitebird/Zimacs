@@ -45,6 +45,9 @@ pub fn scan(gpa: Allocator, io: std.Io, root: []const u8) !*Listing {
 }
 
 pub const Workspace = struct {
+    /// Room for a path relative to the folder.
+    pub const PathBuf = [Dir.max_path_bytes]u8;
+
     gpa: Allocator,
     /// The folder, absolute. Owned. Null while none is open.
     root: ?[]u8 = null,
@@ -149,12 +152,14 @@ pub const Workspace = struct {
         return true;
     }
 
-    /// `path` relative to the root, when it lies inside it.
-    pub fn relativeOf(w: *const Self, path: []const u8) ?[]const u8 {
+    /// `path` relative to the root, when it lies inside it, with `/`
+    /// between folders as in `files`, whatever the system writes. It may be
+    /// written into `buf`.
+    pub fn relativeOf(w: *const Self, path: []const u8, buf: *PathBuf) ?[]const u8 {
         const root = w.root orelse return null;
         if (path.len <= root.len or !std.mem.startsWith(u8, path, root)) return null;
         if (!std.fs.path.isSep(path[root.len])) return null;
-        return path[root.len + 1 ..];
+        return slashed(path[root.len + 1 ..], std.fs.path.sep, buf);
     }
 
     fn walkInBackground(w: *Self, io: std.Io, root: []u8, generation: u32) void {
@@ -166,6 +171,13 @@ pub const Workspace = struct {
         if (w.on_listed) |wake| wake();
     }
 };
+
+/// `relative` with each `sep` made `/`, in `buf` when that changes it.
+fn slashed(relative: []const u8, sep: u8, buf: *Workspace.PathBuf) []const u8 {
+    if (sep == '/' or std.mem.findScalar(u8, relative, sep) == null or relative.len > buf.len) return relative;
+    for (relative, buf[0..relative.len]) |c, *out| out.* = if (c == sep) '/' else c;
+    return buf[0..relative.len];
+}
 
 /// Reads files of a folder one at a time, into one buffer.
 pub const Reader = struct {
@@ -316,8 +328,16 @@ test "opening a folder lists it in the background, and paths map both ways" {
 
     const full = try w.absolute(testing.allocator, "src/main.zig");
     defer testing.allocator.free(full);
-    try testing.expectEqualStrings("src/main.zig", w.relativeOf(full).?);
-    try testing.expect(w.relativeOf("/elsewhere/main.zig") == null);
+    var relative_buf: Workspace.PathBuf = undefined;
+    try testing.expectEqualStrings("src/main.zig", w.relativeOf(full, &relative_buf).?);
+    try testing.expect(w.relativeOf("/elsewhere/main.zig", &relative_buf) == null);
+}
+
+test "Windows separators become the forward slashes the listing uses" {
+    var buf: Workspace.PathBuf = undefined;
+    try testing.expectEqualStrings("people/notes/Ada.md", slashed("people\\notes\\Ada.md", '\\', &buf));
+    try testing.expectEqualStrings("Ada.md", slashed("Ada.md", '\\', &buf));
+    try testing.expectEqualStrings("a\\b", slashed("a\\b", '/', &buf));
 }
 
 test "only paths that stay inside the folder are inside it" {
